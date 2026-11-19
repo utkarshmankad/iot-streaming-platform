@@ -4,7 +4,7 @@
 
 ## Verification
 
-- [ ] Task checkbox and affected document histories updated.
+- [ ] Affected document histories are updated. Implementation PRs leave the task unchecked. Completion PRs link the merged implementation PR.
 - [ ] Staged files contain no credentials, local state or benchmark exports.
 
 ## Follow-ups

@@ -6,7 +6,9 @@ Repository baseline: `architecture.md` is recorded in local commit `af3a48d`. Th
 
 ## How to work through the plan
 
-Each checklist item is a short-lived branch and pull request from current `main`, named `<type>/<task-id>-<description>`. Use a Conventional Commit title and include the relevant spec IDs, verification evidence and any known limits. Split items that cannot land independently into smaller task IDs. Check off a task in the same PR that delivers it. Keep unfinished feature paths behind configuration until they can pass a full smoke test.
+Each checklist item is a short-lived branch and pull request from current `main`, named `<type>/<task-id>-<description>`. Use a Conventional Commit title and include the relevant spec IDs, verification evidence and any known limits. Split items that cannot land independently into smaller task IDs. Keep the task unchecked in its implementation PR. After GitHub confirms that PR merged into `main`, open a docs-only PR to check off the task and link the implementation PR in the Change history. The completion PR uses the same required CI and squash-merge rules. Keep unfinished feature paths behind configuration until they can pass a full smoke test.
+
+Use a separate checkout for implementation. The hourly runner fetches and fast-forwards the laptop checkout of `main` at the start of each run and after a confirmed merge. It verifies that the local commit and tracked tree match `origin/main`. If local changes, a different branch or divergent commits prevent a safe fast-forward, report the blocker and preserve the checkout.
 
 ## M0 · Scaffold the project and development and deployment environments
 
@@ -83,3 +85,4 @@ Record changes to milestone sequence, tasks or exit gates here in the same pull 
 | Hourly task runner | This revision | Added a Follow-ups section for implementation discoveries and owner decisions. |
 | M0.1 repository setup | This revision | Recorded the public repository decision, protected trunk and bootstrap CI from PR #1. Added onboarding, contribution and local file conventions. |
 | M0.2 toolchain scaffold | This revision | Added the three Java modules, React shell, locked dependencies, and the planned source directories. Verified build and image-platform availability. |
+| Post-merge task tracking and sync | This revision | Moved the completion checkbox to a protected follow-up PR after the implementation merge. Added safe local synchronization and verification against GitHub main. |

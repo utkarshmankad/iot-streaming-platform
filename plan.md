@@ -68,6 +68,10 @@ Each checklist item is a short-lived branch and pull request from current `main`
 | AC-09–10 · Schema, duplicates and MQTT | M1 ingest and CI fault results |
 | AC-11–12 · Alerts, failure suites and tenant boundaries | M3 CI artifacts and M4 pilot evidence |
 
+## Follow-ups
+
+Record validated work discovered during implementation with a stable ID, originating task or PR, expected outcome, and dependencies. Use checklist entries. The hourly runner can select an actionable follow-up after earlier eligible milestone tasks. A follow-up requiring an owner decision stays blocked until the decision is recorded.
+
 ## Change history
 
 Record changes to milestone sequence, tasks or exit gates here in the same pull request as the edit. Add one entry per change request with its date or version, a short summary, and the affected IDs or sections when applicable. Use a PR or commit reference when available. When a request changes more than one document, record its effect in each affected file.
@@ -76,3 +80,4 @@ Record changes to milestone sequence, tasks or exit gates here in the same pull 
 |---|---|---|
 | v0.1 | `c0ef289` | Established M0 as scaffolding from scratch, including development, laptop deployment and CI. Sequenced telemetry, trends, controls and recovery, then calibration, pilot and 15-day soak. Added milestones, exit gates and acceptance evidence. |
 | Documentation tracking | This revision | Added a record of delivery-plan changes and the convention for future entries. |
+| Hourly task runner | This revision | Added a Follow-ups section for implementation discoveries and owner decisions. |

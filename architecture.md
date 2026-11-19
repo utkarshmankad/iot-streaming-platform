@@ -284,3 +284,16 @@ Start each scenario from a known fixture on an isolated Compose project with dis
 | M4 | Run calibration, 24-hour pilot and 15 active workload days. Record hardware, versions, configuration, interruptions and observed limits. |
 
 Use `backend/`, `gateway/`, `simulator/`, `contracts/`, `frontend/`, `perf/` and `scripts/`. Keep migration ownership with the backend. Store repeatable Compose commands and failure drills in the runbook. Verify all spec acceptance IDs through tests or experiment evidence. Apply the documented protected-trunk and squash-merge policy once the GitHub Actions gate is verified. [Invoice Intel CI policy](https://github.com/utkarshmankad/invoice-intel/blob/c62b77ab8dccabffa43323ac5ef5dc7573e9a50f/docs/ci.md)
+
+## Change history
+
+Record changes to design decisions, interfaces or operational behavior here in the same pull request as the edit. Add one entry per change request with its date or version, a short summary, and the affected IDs or sections when applicable. Use a PR or commit reference when available. When a request changes more than one document, record its effect in each affected file.
+
+| Baseline or change | Local commit | Design decisions recorded |
+|---|---|---|
+| v0.1 | `165ad55` | Established the Compose topology, technology choices, tenant-scoped storage, durable telemetry path, confirmed controls and multi-day recovery design. |
+| v0.2 | `7810f2c` | Added Mosquitto, MQTT topics and binary contracts, the database registry schema, an end-to-end data flow, and failure and recovery behavior by stage. |
+| v0.3 | `e30d4fb` | Defined Prometheus metrics and rules, Alertmanager routing, the independent SQLite alarm ledger, Docker log rotation and export locations. |
+| v0.4 | `ddf4e48` | Detailed ten CI and pilot fault scenarios with injection steps, expected outcomes and evidence locations. |
+| v0.5 | `af3a48d` | Defined browser API and internal gateway contracts, including authorization, errors, idempotency and contract verification. |
+| Documentation tracking | This revision | Added a record of design changes and the convention for future entries. |

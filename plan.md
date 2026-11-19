@@ -67,3 +67,12 @@ Each checklist item is a short-lived branch and pull request from current `main`
 | AC-07–08 · Extended outage and restore | M4 pilot queue/replay and restore drill results |
 | AC-09–10 · Schema, duplicates and MQTT | M1 ingest and CI fault results |
 | AC-11–12 · Alerts, failure suites and tenant boundaries | M3 CI artifacts and M4 pilot evidence |
+
+## Change history
+
+Record changes to milestone sequence, tasks or exit gates here in the same pull request as the edit. Add one entry per change request with its date or version, a short summary, and the affected IDs or sections when applicable. Use a PR or commit reference when available. When a request changes more than one document, record its effect in each affected file.
+
+| Baseline or change | Local commit | Delivery changes recorded |
+|---|---|---|
+| v0.1 | `c0ef289` | Established M0 as scaffolding from scratch, including development, laptop deployment and CI. Sequenced telemetry, trends, controls and recovery, then calibration, pilot and 15-day soak. Added milestones, exit gates and acceptance evidence. |
+| Documentation tracking | This revision | Added a record of delivery-plan changes and the convention for future entries. |

@@ -95,3 +95,16 @@ Reference: [Invoice Intel CI policy at the reviewed commit](https://github.com/u
 - **CI-01.** Trigger CI on PRs to `main`, pushes to `main` and manual dispatch. Cancel superseded PR runs. Use least-privilege permissions and SHA-pinned actions. Run PR hygiene, tracked secrets/data guards and gitleaks, actionlint, Spotless, Java unit/ArchUnit and Testcontainers integration tests, merged JaCoCo line coverage ≥85%, SpotBugs/FindSecBugs, CodeQL, high/critical dependency and GPL/AGPL review, hadolint, Trivy fixable high/critical image scan, Compose smoke test and Gatling performance assertions. Add frontend type-check, ESLint, unit tests and production build. Adapt the Invoice Intel data guard to forbid captured telemetry, secrets, database files and benchmark outputs.
 - **CI-02.** `CI gate` summarizes all jobs, runs even if dependencies fail, and rejects failed or cancelled jobs. Permit intentional prerequisite skips before build components exist. Once a component lands, its expected checks must fail if build inputs disappear. Docs-only PRs skip performance only. Run the Compose smoke test with synthetic sensors and disposable credentials. Verify startup, authorized ingest and trend read, duplicate replay, and a sensor off/on round trip as those capabilities land. Publish CI reports for 14 days.
 - **CI-03.** Nightly at 03:00 IST, run PIT on critical ingestion and control code and rescan fresh images with Trivy. Nightly jobs are outside the merge gate. Add CODEOWNERS, a PR template and weekly grouped Dependabot updates for Gradle, npm, Docker and Actions.
+
+## Change history
+
+Record changes to requirements, scope or acceptance criteria here in the same pull request as the edit. Add one entry per change request with its date or version, a short summary, and the affected IDs or sections when applicable. Use a PR or commit reference when available. When a request changes more than one document, record its effect in each affected file.
+
+| Baseline or change | Local commit | Requirements recorded |
+|---|---|---|
+| v0.1 | `8d09e15` | Defined the laptop Compose stack, one-second sensor cadence, Java and TimescaleDB ingestion, React trends and controls, 1 GB/day target, 15-day soak, and Invoice Intel-style branching and CI. |
+| v0.2 | `86f65f4` | Made all sensors simulated, added ambient light and oxygen, and specified per-event validation, idempotency, tenant isolation, multi-day buffering, backups and recovery. |
+| v0.3 | `7810f2c` | Switched the simulator link to MQTT 5 with binary Protobuf, separated transport ACKs from durable gateway receipts, and defined the workload target in binary payload bytes. |
+| v0.4 | `e30d4fb` | Added observability, alert severity and access rules, log and alarm storage, and monitoring verification requirements. |
+| v0.5 | `ddf4e48` | Added CI and pilot fault-test requirements, per-tenant reconciliation and evidence requirements. |
+| Documentation tracking | This revision | Added a record of requirement changes and the convention for future entries. |

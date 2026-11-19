@@ -1,4 +1,7 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
+import com.github.spotbugs.snom.SpotBugsExtension
+import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
+import org.gradle.testing.jacoco.tasks.JacocoReport
 import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.tasks.SourceSetContainer
 import org.gradle.api.tasks.testing.Test
@@ -7,12 +10,18 @@ import org.gradle.jvm.toolchain.JvmVendorSpec
 import org.springframework.boot.gradle.tasks.bundling.BootJar
 
 plugins {
+    jacoco
+    id("com.github.spotbugs") version "6.5.13" apply false
     id("com.diffplug.spotless") version "8.11.0" apply false
     id("org.springframework.boot") version "4.1.2" apply false
 }
 
-subprojects {
+val services = listOf(project(":backend"), project(":gateway"), project(":simulator"))
+
+configure(services) {
     apply(plugin = "java")
+    apply(plugin = "jacoco")
+    apply(plugin = "com.github.spotbugs")
     apply(plugin = "com.diffplug.spotless")
     apply(plugin = "org.springframework.boot")
 
@@ -31,6 +40,13 @@ subprojects {
         java {
             googleJavaFormat("1.36.1")
         }
+    }
+
+    extensions.configure<JacocoPluginExtension> {
+        toolVersion = "0.8.16"
+    }
+    extensions.configure<SpotBugsExtension> {
+        toolVersion.set("4.10.5")
     }
 
     val sourceSets = extensions.getByType<SourceSetContainer>()
@@ -71,5 +87,75 @@ subprojects {
         add("runtimeOnly", "io.micrometer:micrometer-registry-prometheus")
         add("testImplementation", "org.junit.jupiter:junit-jupiter")
         add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher")
+        add("spotbugsPlugins", "com.h3xstream.findsecbugs:findsecbugs-plugin:1.14.0")
+        if (name == "backend") {
+            add("testImplementation", "com.tngtech.archunit:archunit-junit5:1.5.1")
+        }
+    }
+}
+
+jacoco {
+    toolVersion = "0.8.16"
+}
+
+val coverageClasses = files(services.map { service ->
+    service.extensions.getByType<SourceSetContainer>().getByName("main").output.classesDirs
+        .asFileTree.matching {
+            // These three main methods only delegate startup to Spring Boot.
+            exclude(
+                "iot/platform/backend/BackendApplication.class",
+                "iot/platform/gateway/GatewayApplication.class",
+                "iot/platform/simulator/SimulatorApplication.class",
+            )
+        }
+})
+val coverageData = files(services.flatMap { service ->
+    listOf("test", "integrationTest").map { suite ->
+        service.layout.buildDirectory.file("jacoco/$suite.exec")
+    }
+})
+val coverageSources = files(services.map { it.file("src/main/java") })
+val coverageTests = services.flatMap { service ->
+    listOf("test", "integrationTest").map { suite -> service.tasks.named(suite) }
+}
+
+val coverageInputs = tasks.register("verifyCoverageInputs") {
+    dependsOn(coverageTests)
+    doLast {
+        check(coverageClasses.isEmpty || coverageData.files.any { it.isFile }) {
+            "Production classes require coverage data from the Java test suites."
+        }
+        if (coverageClasses.isEmpty) {
+            logger.lifecycle("Coverage threshold deferred: only Spring Boot entry points exist.")
+        }
+    }
+}
+
+tasks.register<JacocoReport>("jacocoMergedReport") {
+    dependsOn(coverageInputs)
+    classDirectories.setFrom(coverageClasses)
+    sourceDirectories.setFrom(coverageSources)
+    executionData.setFrom(coverageData)
+    onlyIf("there are measurable production classes") { !coverageClasses.isEmpty }
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+    }
+}
+
+tasks.register<JacocoCoverageVerification>("jacocoMergedCoverageVerification") {
+    dependsOn(coverageInputs)
+    classDirectories.setFrom(coverageClasses)
+    sourceDirectories.setFrom(coverageSources)
+    executionData.setFrom(coverageData)
+    onlyIf("there are measurable production classes") { !coverageClasses.isEmpty }
+    violationRules {
+        rule {
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.85".toBigDecimal()
+            }
+        }
     }
 }

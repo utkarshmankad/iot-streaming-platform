@@ -5,6 +5,7 @@ COPY gradlew settings.gradle.kts build.gradle.kts ./
 COPY backend/ backend/
 COPY gateway/ gateway/
 COPY simulator/ simulator/
+COPY perf/build.gradle.kts perf/
 ARG SERVICE
 RUN ./gradlew ":${SERVICE}:bootJar" --no-daemon && \
     cp "${SERVICE}/build/libs/application.jar" /tmp/application.jar

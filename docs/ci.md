@@ -23,6 +23,14 @@ The coverage threshold applies once there is measurable application code. The on
 
 The separate `Nightly` workflow rebuilds and rescans the application images at 03:00 IST. Its status is outside the required PR gate. Mutation testing will join the scheduled workflow after critical ingestion and command code is available.
 
+## Repository protection and updates
+
+GitHub enforces the active `main-trunk` ruleset on the public repository. Pull requests require resolved review threads and the strict GitHub Actions `CI gate`. GitHub permits squash merges, maintains linear history, blocks deletion and force pushes, and has no bypass actors. Squash auto-merge and merged-branch cleanup are enabled.
+
+The dependency graph, Dependabot alerts and security updates, secret scanning, and secret scanning push protection are enabled in repository settings. The CodeQL workflow remains the code scanning configuration.
+
+Dependabot opens grouped weekly version update PRs on Mondays for Gradle, frontend npm, Dockerfiles, Docker Compose images and GitHub Actions. The checked-in [Dependabot configuration](../.github/dependabot.yml) groups minor and patch updates for package and image ecosystems. GitHub Actions updates share one group. Dependabot PRs use the same required CI checks.
+
 Run the checks from a clean checkout:
 
 ```sh

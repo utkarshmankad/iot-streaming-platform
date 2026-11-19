@@ -242,6 +242,8 @@ jobs:
         with:
           dockerfile: frontend/Dockerfile
       - run: ./scripts/stack.sh test build
+        env:
+          COMPOSE_PARALLEL_LIMIT: '1'
       - name: Scan the application images for fixable high and critical findings
         run: |
           scan_dir="$(mktemp -d)"

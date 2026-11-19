@@ -94,6 +94,10 @@ configure(services) {
     }
 }
 
+repositories {
+    mavenCentral()
+}
+
 jacoco {
     toolVersion = "0.8.16"
 }

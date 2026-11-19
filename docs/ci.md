@@ -1,6 +1,6 @@
 # Continuous integration
 
-GitHub Actions runs on pull requests to `main`, pushes to `main`, and manual dispatches. Protected `main` requires the aggregate `CI gate`.
+GitHub Actions runs on pull requests to `main`, pushes to `main`, and manual dispatches. Protected `main` requires the aggregate `CI gate`. Enable GitHub’s dependency graph before running the PR dependency review.
 
 | Stage | What it verifies |
 |---|---|

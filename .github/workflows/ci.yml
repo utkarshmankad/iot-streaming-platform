@@ -225,6 +225,7 @@ jobs:
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
+          retry-on-snapshot-warnings: true
           deny-licenses: AGPL-1.0-only, AGPL-1.0-or-later, AGPL-3.0-only, AGPL-3.0-or-later, GPL-2.0-only, GPL-2.0-or-later, GPL-3.0-only, GPL-3.0-or-later
 
   container:
@@ -249,7 +250,7 @@ jobs:
           scan_dir="$(mktemp -d)"
           mkdir -p "$RUNNER_TEMP/trivy-cache"
           for service in backend gateway simulator frontend; do
-            docker save -o "$scan_dir/image.tar" "iot-platform-$service:test"
+            docker save -o "$scan_dir/image.tar" "iot-platform-${service}:test"
             docker run --rm -v "$scan_dir:/scan:ro" -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
               aquasec/trivy:0.76.2 image --input /scan/image.tar --scanners vuln \
               --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1

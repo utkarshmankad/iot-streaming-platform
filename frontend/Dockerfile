@@ -6,7 +6,7 @@ COPY frontend/index.html frontend/tsconfig.json frontend/vite.config.mjs ./
 COPY frontend/src/ src/
 RUN npm run build
 
-FROM nginx:1.30.2-alpine
+FROM nginx:1.30.7-alpine3.24
 COPY config/nginx/frontend.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /workspace/dist/ /usr/share/nginx/html/
 EXPOSE 8080

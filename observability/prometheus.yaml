@@ -1,0 +1,16 @@
+global:
+  scrape_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+  - job_name: java-services
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["backend:8080", "gateway:8080", "simulator:8080"]

@@ -37,7 +37,7 @@ docker compose -f compose.dev.yaml ps
 
 The script generates fresh local database and MQTT passwords in an ignored, owner-only `.env`. It preserves an existing file. `.env.example` lists the supported variables with empty credential placeholders. Keep existing credentials for the lifetime of the development database volume because PostgreSQL uses the password on first initialization.
 
-The standalone development Compose project exposes TimescaleDB on `127.0.0.1:15432` (database and user `iot_dev`) and Mosquitto on `127.0.0.1:11883` (user `iot_dev`). Override the loopback ports in `.env` if they are already in use. The development broker requires its generated password. The deployment stack and per-device topic permissions are covered by subsequent milestones.
+The standalone development Compose project exposes TimescaleDB on `127.0.0.1:15432` (database and user `iot_dev`) and Mosquitto on `127.0.0.1:11883` (user `iot_dev`). Override the loopback ports in `.env` if they are already in use. The development broker requires its generated password. The [local deployment stack](local-deployment.md) uses separate credentials and volumes. The ingestion milestone adds per-device topic permissions.
 
 ## Hot reload and debug
 
@@ -50,12 +50,12 @@ npm --prefix frontend run dev -- --host 127.0.0.1
 In another terminal, launch an individual service with the development profile and attach a local Java debugger to port 5005:
 
 ```sh
-SPRING_PROFILES_ACTIVE=dev \
+SPRING_PROFILES_ACTIVE=dev SERVER_ADDRESS=127.0.0.1 SERVER_PORT=8081 \
 SPRING_CONFIG_ADDITIONAL_LOCATION="file:$PWD/config/" \
 ./gradlew :backend:bootRun --debug-jvm
 ```
 
-The `dev` profile enables application debug logging. Use `:gateway:bootRun` or `:simulator:bootRun` to debug the other entry points one at a time. The scaffold entry points complete startup and exit after the debugger resumes them. The deployment milestone adds long-running runtime services.
+The `dev` profile enables application debug logging. Use `:gateway:bootRun` or `:simulator:bootRun` to debug the other entry points one at a time. After the debugger resumes the service, the scaffold serves HTTP on loopback port 8081. Stop the process before starting another service on that port.
 
 ## Stop or reset the development stack
 

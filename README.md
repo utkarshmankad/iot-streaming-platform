@@ -6,3 +6,4 @@ A laptop-local platform for simulated environmental sensors. The design sends bi
 - [Architecture and API contracts](architecture.md)
 - [Implementation plan](plan.md)
 - [Local setup](docs/local-development.md)
+- [Local Docker deployment](docs/local-deployment.md)

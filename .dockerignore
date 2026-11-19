@@ -1,0 +1,13 @@
+.git
+**/.env
+**/.env.*
+**/.gradle
+**/build
+**/node_modules
+**/dist
+**/*.key
+**/*.pem
+**/*.sqlite*
+backups
+logs
+run-artifacts

@@ -39,6 +39,8 @@ Publish only the frontend port on loopback. Use private Compose networks to sepa
 
 For development, `compose.dev.yaml` provides TimescaleDB and an authenticated Mosquitto instance on configurable loopback ports. The Java services and Vite run on the host for debugging and hot reload. The development database has its own named volume. The deployment topology above keeps those dependency ports internal.
 
+The deployment Compose file provides `local` and `test` profiles with distinct project names and storage. It builds separate images for backend, gateway, simulator and frontend, publishes only the dashboard on loopback, and isolates service links on internal Docker networks. A dedicated frontend ingress bridge has outbound masquerading disabled. M0 exposes Spring process readiness and metrics. Initial dependency readiness is checked by Compose before starting dependents. Runtime telemetry, dependency-specific readiness and the durable alarm receiver land with their feature tasks. [Local deployment runbook](docs/local-deployment.md)
+
 ## 2. Technology choices
 
 | Area | Choice and rationale |
@@ -301,3 +303,4 @@ Record changes to design decisions, interfaces or operational behavior here in t
 | Documentation tracking | This revision | Added a record of design changes and the convention for future entries. |
 | M0.2 toolchain pins | This revision | Recorded exact scaffold dependency versions and selected PostgreSQL/TimescaleDB and Mosquitto images for the local and CI architectures. |
 | M0.3 development environment | This revision | Added a loopback-only database and MQTT development profile, generated local credentials, and host-side build, test and debugging workflows. |
+| M0.4 deployment scaffold | This revision | Added separate application images, private local/test Compose projects, health checks, monitoring scaffolds, persistent volumes and an offline recreation command. |

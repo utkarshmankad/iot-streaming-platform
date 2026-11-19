@@ -1,0 +1,299 @@
+# Environmental IoT streaming platform architecture
+
+**Version 0.5 · Baseline specification v0.5**
+
+The platform is a single-laptop Docker Compose deployment. It runs six types of simulated sensors across at least two tenants, supports sampling controls from the browser, and is designed to ingest about 1 GB of unique telemetry bodies per active day over 15 days. Requirements and acceptance thresholds are defined in [specs.md](specs.md).
+
+## 1. Deployment and service boundaries
+
+```mermaid
+flowchart LR
+  User["Operator browser"]
+  Vault["Independent encrypted backup drive"]
+  subgraph Laptop["Laptop · Docker Compose"]
+    Web["Nginx · React dashboard"]
+    API["Java API · ingest, trends and commands"]
+    DB[("PostgreSQL + TimescaleDB")]
+    Edge["Java edge gateway"]
+    Sim["Java sensor simulator"]
+    Outbox[("SQLite simulator outbox")]
+    Spool[("SQLite gateway spool")]
+    Backup["Backup tooling"]
+    User -->|"Loopback :8080"| Web
+    Web -->|"Same-origin /api"| API
+    Broker["Eclipse Mosquitto · MQTT 5"]
+    Sim <-->|"MQTT · binary Protobuf"| Broker
+    Broker <-->|"MQTT · binary Protobuf"| Edge
+    Edge -->|"Batches, status and command polling"| API
+    API -->|"JDBC"| DB
+    Sim --- Outbox
+    Edge --- Spool
+    DB --> Backup
+    Outbox --> Backup
+    Spool --> Backup
+  end
+  Backup --> Vault
+```
+
+Publish only the frontend port on loopback. Use private Compose networks to separate the browser proxy, sensor MQTT network, gateway/backend link and database. The gateway is the simulator’s ingress and command relay. The backend is the sole application service with database access. Backup tooling has a dedicated database role and writes to a mounted independent drive. Use separate named volumes for the database, spool and outbox. Give Compose services health checks and use readiness probes to verify dependencies. Startup and restart must tolerate dependencies coming up in any order.
+
+## 2. Technology choices
+
+| Area | Choice and rationale |
+|---|---|
+| Build | Temurin Java 25, Spring Boot 4.x and a Gradle Kotlin DSL multi-project build. Use a pinned Gradle wrapper. Reuse the Java toolchain and testing model from Invoice Intel. Put the backend, gateway and simulator in separate modules with independent images. |
+| Backend | Spring MVC and Spring Security for APIs and operator sessions, HikariCP and PostgreSQL JDBC for explicit batch transactions, Flyway for schema migrations. Run migrations with a dedicated role and give application connections only the permissions they need. |
+| Edge and simulation | Java services share versioned telemetry schemas and validation fixtures with the backend. Use Protobuf Java generated classes and shared, versioned per-type validators. Use Eclipse Paho MQTT v5 for simulator and gateway clients, and Eclipse Mosquitto for the local broker. Use SQLite on local volumes with WAL and `synchronous=FULL` for durable acknowledgments. Keep SQLite writes short and serialize writes within each service. |
+| Transport | MQTT 5 over TCP with binary Protobuf for the sensor link. HTTP with bounded Protobuf batch bodies between gateway and backend. HTTP JSON for the browser API. The application outbox and spool own multi-day durability. |
+| Database | PostgreSQL with the TimescaleDB extension for the reading hypertable and 15-minute continuous aggregate. Select and pin a compatible PostgreSQL/TimescaleDB image pair after checking native arm64 and amd64 support in M0. Keep retention and compression settings explicit and record changes in benchmark runs. |
+| Frontend | React, TypeScript, Vite, Apache ECharts and TanStack Query for charting, query caching and polling. Nginx serves static assets and proxies API traffic. Use tenant-aware query keys and clear in-flight results when tenants switch. |
+| Operations | Spring Boot Actuator and Micrometer for health and metrics. Capture local Prometheus metrics and host/container resource counters. Evaluate alert rules in Prometheus, route with Alertmanager, and store notifications in an independent SQLite alarm ledger. Use PostgreSQL base backups plus WAL archiving and SQLite Online Backup API snapshots. |
+| Verification | JUnit, ArchUnit, Testcontainers with the pinned Timescale image, Vitest and Playwright for the browser. Gatling measures the short CI workload. A separate local runner drives the calibration, pilot, soak and recovery profiles. |
+
+Verify exact dependency and image versions in the first implementation PR and record them in the wrapper, dependency locks and Compose image references. [Spring Boot requirements](https://docs.spring.io/spring-boot/system-requirements.html) · [SQLite durability settings](https://www.sqlite.org/pragma.html#pragma_synchronous) · [PostgreSQL continuous archiving](https://www.postgresql.org/docs/current/continuous-archiving.html)
+
+## 3. Telemetry data flow and idempotency
+
+```mermaid
+sequenceDiagram
+  participant S as Simulator
+  participant M as MQTT broker
+  participant G as Edge gateway
+  participant A as Java backend
+  participant D as TimescaleDB
+  participant U as React dashboard
+  S->>S: Persist event in outbox
+  S->>M: Publish telemetry at QoS 1
+  M-->>S: Transport PUBACK
+  M->>G: Deliver binary telemetry
+  G->>G: Validate event and commit SQLite spool
+  G->>M: Publish durable application receipt
+  M->>S: Deliver application receipt
+  S->>S: Clear acknowledged outbox entry
+  G->>A: Send bounded batch of original payloads
+  A->>D: Validate and atomically commit receipts and readings
+  D-->>A: Commit
+  A-->>G: Return per-event outcomes
+  G->>G: Clear terminal spool entries
+  U->>A: Request tenant-scoped trends through Nginx
+  A->>D: Read aggregate buckets and raw tail
+  A-->>U: Return trends and freshness
+```
+
+1. Each registered simulator stream emits a deterministic reading each second while enabled. A transaction persists the event and generator checkpoint before sending it. Persist a stable event ID and the original timestamp, version and value. Heartbeats use a separate path and continue while sampling is paused.
+2. The broker authenticates the simulator and enforces topic ACLs. The gateway resolves tenant, device and sensor from the authorized topic and checks every event against the Protobuf contract and the registered sensor type’s validation rules. It publishes an application receipt after the SQLite spool commits. Duplicate MQTT deliveries use tenant/sensor/event identity and a content fingerprint at the spool while queued. The simulator keeps each event until acknowledged or permanently rejected.
+3. The gateway sends up to 250 events per batch or flushes after one second. The Protobuf batch envelope carries each reading as original bytes plus gateway receipt metadata so each entry can be independently decoded and validated. It schedules tenants fairly and retries transport and transient database failures with bounded exponential backoff and jitter. The backend repeats authorization and schema validation and returns per-event outcomes for mixed batches.
+4. Stage validated events for one database transaction per batch. Claim their tenant/sensor/event keys in the receipt ledger and insert readings only for newly claimed keys. The first committed version owns the key. Compare stored canonical content fingerprints for claims that already exist. Identical payloads return duplicate success and changed payloads return permanent conflict. Resolve duplicate IDs within a batch using the same rules. Write receipts and readings atomically and acknowledge after commit. A lost response replays the same IDs.
+5. Remove terminal events from the spool only after the response is received and recorded. Keep reason-coded rejection and loss counters, with identifiers in diagnostic records and no raw payloads in logs. On queue saturation, return backpressure and preserve queued events.
+
+Protobuf definitions and versioned validation rules live under `contracts/` and cover temperature, humidity, pressure, PM2.5, ambient light and oxygen concentration. Freeze canonicalization rules for each event version. Record original MQTT Protobuf payload sizes at the gateway and attribute unique accepted bytes to committed identities, separately from retry traffic and storage.
+
+### MQTT topics and delivery
+
+Use `iot/v1/{tenantId}/{deviceId}/{sensorId}/{kind}` with kinds `telemetry`, `heartbeat`, `receipt`, `command` and `command-ack`. Each device principal may publish telemetry, heartbeat and command acknowledgments for its assigned streams and subscribe to its receipts and commands. Gateway principals get only their assigned topic rights. Check topic IDs against registry assignments and payload IDs. Keep the broker on the private sensor network with anonymous access disabled. Provision locally from registry-derived ACLs and credentials kept outside Git.
+
+Use QoS 1 for telemetry, application receipts, commands and command ACKs. Use QoS 0 for periodic heartbeats. Do not retain telemetry or commands. Use stable client IDs, bounded broker queues and reconnect with backoff and jitter. Session resumption can reduce retransmission, while the application outbox retries unchanged events whenever a durable receipt is missing. Apply broker packet limits before decoding. Correlate every accepted receipt with the immutable event ID and content fingerprint and every command ACK with the command ID and version. On full spool, issue retryable status correlated to the event and keep the simulator outbox entry. Bound retry concurrency per tenant. [MQTT 5 standard](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html) · [Protobuf wire format](https://protobuf.dev/programming-guides/encoding/) · [Mosquitto configuration](https://www.mosquitto.org/man/mosquitto-conf-5.html)
+
+## 4. Tenant-scoped data and analytics
+
+### Registry schema
+
+PostgreSQL is authoritative for tenant membership, provisioning and sensor metadata. Use UUIDs for identifiers, UTC timestamps for audit fields and explicit lifecycle states `active`, `disabled` and `retired`. A disabled registry identity cannot authenticate. An operator pause changes sampling state separately.
+
+| Table | Primary key | Required columns and constraints |
+|---|---|---|
+| `tenants` | `tenant_id` | Unique slug, display name, lifecycle state, created timestamp |
+| `operator_memberships` | `(tenant_id, operator_id)` | Foreign keys to tenant and operator, constrained role (`viewer` or `operator`) |
+| `gateways` | `(tenant_id, gateway_id)` | Tenant FK, name, lifecycle state and credential reference |
+| `devices` | `(tenant_id, device_id)` | Composite FK to assigned gateway, MQTT principal reference, unique broker client ID, label and lifecycle state |
+| `sensor_types` | `type_code` | Canonical unit, description and default sampling period. Seed all six types. |
+| `sensor_schema_versions` | `(type_code, schema_version)` | FK to type, Protobuf contract identifier, compiled validator revision, accepted value bounds and acceptance status |
+| `sensors` | `(tenant_id, sensor_id)` | Composite FK to device, FK to type, display name, configured sampling period (default 1,000 ms) and lifecycle state |
+| `sensor_state` | `(tenant_id, sensor_id)` | Composite FK to sensor, desired and confirmed enabled states, applied version, last heartbeat and last observation time |
+
+Create the registry and seed type/schema metadata through Flyway. Use an idempotent local provisioning command to register demo tenants, gateways, simulated devices and sensors, then generate the broker ACL projection. Credentials are managed as secrets with registry references. A gateway starts with a validated registry snapshot and caches a versioned last-known-good copy on disk. It refreshes from the backend when reachable and accepts only provisioned identities during a partition. Backend revalidates current ownership and schema acceptance during replay. Keep prior schema versions accepted for the supported replay window unless revoked, and record any permanent rejection during reconciliation.
+
+### Telemetry and control storage
+
+| Relation | Key and role |
+|---|---|
+| `readings` | Time-partitioned hypertable with `(tenant_id, sensor_id, observed_at, event_id)` as the unique key and an index starting with tenant, sensor and descending observation time. Start with one-day chunks. |
+| `event_receipts` | Relational ledger keyed by `(tenant_id, sensor_id, event_id)` with a canonical fingerprint. Include it in storage sizing and retain it for the full replay and raw retention windows. |
+| `sensor_state`, `commands`, `command_outbox` | Tenant-scoped liveness, desired and applied states, command versions and delivery history. Store audit outcomes with tenant and actor. |
+| `sensor_15m` | Private continuous aggregate grouped by tenant, sensor and UTC bucket. Store count, sum, min and max. |
+
+Derive tenant context from authenticated service credentials or verified operator membership. Use transaction-local tenant context for row-level policies on supported relational tables and verify that a reused connection cannot inherit a prior tenant. Establish explicit tenant predicates for hypertable queries and private aggregate access. Keep aggregate relations inaccessible to end users. Scope command dispatch, caches, queue quotas and restore verification by tenant. Use integration fixtures with overlapping sensor and event IDs.
+
+The trend path rolls 15-minute states into hourly, daily and Monday-aligned weekly UTC buckets using total sum divided by total count. Configure a materialized-only aggregate and query the raw tail where buckets have yet to be materialized. The aggregate reader uses a single verified materialization boundary aligned to a 15-minute edge, with a consistent database snapshot so the two ranges cannot overlap or leave a gap. Test this boundary against the selected TimescaleDB version before the soak. Refresh recent completed buckets every minute. Route older accepted readings to a durable repair queue keyed by affected time bucket and coalesce repairs. Expose freshness and render empty buckets as chart gaps. [Timescale continuous aggregate refresh](https://github.com/timescale/docs/blob/latest/use-timescale/continuous-aggregates/refresh-policies.md)
+
+## 5. Sampling controls and status
+
+The operator submits an authenticated, CSRF-protected enable or pause request. In one transaction the backend validates membership, records the desired state, allocates a monotonic per-sensor version and writes the command to its outbox. The gateway polls for unexpired commands and relays them to the simulator over MQTT. The simulator persists the applied version and sampling state before sending an ACK. The backend accepts an ACK only for its tenant, sensor and command version. A repeated idempotency key returns the prior command for an identical request and conflicts if the request changes.
+
+The UI distinguishes requested state, last confirmed state and connectivity. An enabled stream with healthy heartbeats but no new readings for ten seconds shows stale. Three missed five-second heartbeats show offline. Use event time for freshness so old replay cannot make a stale stream appear live. Surface pending, failed, expired and superseded commands. Use an explicit restore generation when reconciling command versions after point-in-time recovery so restored state cannot replay stale instructions.
+
+## 6. API specifications
+
+This section implements ING-01 through ING-04, UI-01 through UI-03, CTL-01 through CTL-02, and TEN-01 through TEN-03 in [specs.md](specs.md). Check in the browser OpenAPI contract under `contracts/openapi/` and the internal Protobuf messages under `contracts/proto/`.
+
+### Browser API
+
+The React dashboard sends same-origin JSON requests through Nginx. Every request uses the authenticated session and its active tenant. A tenant switch must be authorized against the operator's memberships before it updates the session. Viewers can read registry and trends, and operators can also issue commands. Require a CSRF token for session mutations and commands. Use ISO 8601 UTC timestamps in responses, opaque string IDs and stable machine-readable status codes. Return `Cache-Control: no-store` for authenticated responses.
+
+| Method and path | Request | Success response |
+|---|---|---|
+| `GET /api/v1/sensors` | Optional opaque `cursor` and `limit`, default 50 and maximum 200. Scope the cursor to the active tenant. | `200` with `items` and nullable `nextCursor`. Each item includes `sensorId`, `displayName`, `type`, `unit`, `samplingPeriodMs`, `desiredEnabled`, nullable `confirmedEnabled`, `connectivity` (`online\|offline\|unknown`), `sampleStatus` (`fresh\|stale\|paused\|unknown`), and nullable `lastObservedAt` and `lastHeartbeatAt`. |
+| `GET /api/v1/trends` | One to ten distinct repeated `sensorId` parameters, required `from`, `to`, and `bucket` (`15m\|1h\|1d\|1w`). The interval is `[from,to)`, with UTC-aligned boundaries, weeks starting Monday, and at most 30 days of retained history. Allow an aligned `to` at the end of the current bucket. | `200` with effective bounds, resolution, generation time, and `series`. Each series includes sensor ID, type, unit, and ordered buckets. Each bucket includes start, exclusive end, count, min, max, mean, and `partial`. Count zero yields null statistics. Include aggregate refresh timestamps and freshness state so the client can flag stale data. |
+| `POST /api/v1/sensors/{id}/commands` | `Idempotency-Key` header and JSON body `{"enabled":false}` or `{"enabled":true}`. | `202 Accepted` with `Location: /api/v1/commands/{commandId}` and a body containing `commandId`, `sensorId`, `version`, `requestedEnabled`, `status`, `createdAt` and `expiresAt`. The first response represents a durable request. The dashboard polls its status before showing confirmation. |
+| `GET /api/v1/commands/{id}` | Command ID from the create response. | `200` with command identity and requested state, `status` (`pending\|applied\|failed\|expired\|superseded`), nullable `confirmedEnabled`, nullable `resolvedAt` and optional `reasonCode`. An applied command requires a valid simulator acknowledgment. |
+
+Example trend request for an aligned two-bucket window:
+
+```http
+GET /api/v1/trends?sensorId=8c2c6f50-5a22-4ab8-a3c9-0068e560aa01&from=2026-11-20T00:00:00Z&to=2026-11-20T00:30:00Z&bucket=15m
+```
+
+A returned bucket has the following shape. The enclosing series identifies the sensor and measurement unit.
+
+```json
+{
+  "start": "2026-11-20T00:00:00Z",
+  "end": "2026-11-20T00:15:00Z",
+  "count": 900,
+  "min": 20.1,
+  "max": 22.3,
+  "mean": 21.4,
+  "partial": false
+}
+```
+
+Scope command idempotency keys to tenant, actor and sensor. Store the normalized request and command reference with the command transaction. Identical replays return the same command ID and original acceptance response, even if its status has since advanced. Reusing a key with a different requested state returns `409 IDEMPOTENCY_CONFLICT`. The default expiration is 60 seconds from creation. A sequence of commands can supersede pending requests. Status responses preserve the outcome for each command and cannot downgrade a newer confirmed sensor state.
+
+Errors use `{"code":"INVALID_BUCKET","message":"…","requestId":"…"}` with optional field-level details. Use `400` for invalid parameters, `401` for a missing or expired session, `403` for insufficient permissions or CSRF failure, `404` for an unknown or out-of-tenant resource, `409` for conflicts, `429` with `Retry-After` for throttling, and `503` for temporary service unavailability. For a trend request containing an unknown or out-of-tenant sensor, reject the entire request with the same generic `404`. The dashboard polls visible trends about every 15 seconds and backs off on temporary errors.
+
+### Internal gateway and backend API
+
+The following paths are internal to the Compose network. Authenticate every call with scoped gateway credentials and derive the gateway and its authorized tenants from those credentials. Requests and responses use Protobuf over HTTP. Use UTC epoch milliseconds for internal timestamps.
+
+| Method and path | Contract |
+|---|---|
+| `POST /internal/v1/telemetry/batches` | Batch of up to 250 entries, bounded by total message size. Each entry contains its correlation ID, authorized topic identity, original Protobuf telemetry bytes and gateway receipt timestamp. `200` returns one result per entry with `committed`, `duplicate` or `rejected` and a stable reason code for permanent rejection. Respond after the transaction commits. Use `400` for malformed batch envelopes, `413` for oversized batches, and `429` or `503` for transient failure. Retry timeout or transient outcomes with unchanged event IDs. Split an oversized batch and flag any individually oversized event. |
+| `GET /internal/v1/registry` | Returns a versioned snapshot of gateway assignments, active device and sensor IDs, type and accepted schema versions. Supports conditional retrieval by snapshot version. Gateway persists the last verified snapshot. |
+| `POST /internal/v1/sensor-heartbeats` | Sends bounded, gateway-scoped batches of heartbeat observations, including device and sensor identity, source time and last applied command version/state. Replayed observations do not move freshness backward. |
+| `GET /internal/v1/commands/pending` | Returns a bounded page of unexpired commands for the authenticated gateway with tenant/device/sensor identity, command ID, version, requested state and absolute expiry. Polling does not complete delivery. Commands remain eligible for retry until their state advances or they expire. |
+| `POST /internal/v1/commands/{id}/ack` | Reports command ID, sensor identity, version, actual state and device application timestamp. Duplicate valid ACKs are idempotent. Reject unauthorized or mismatched ACKs and prevent stale ACKs from overwriting newer state. |
+
+The simulator uses the MQTT topic contract in §3. A telemetry receipt carries event ID, fingerprint, outcome and optional reason code. A command carries command ID, version, desired state and expiry. A command ACK carries the applied version and reported state. Keep MQTT payload contracts versioned alongside the HTTP batch and control messages.
+
+### Contract verification
+
+Run OpenAPI and Protobuf schema validation in CI. Exercise tenant-scoped pagination, all four bucket sizes and boundaries, empty and partial buckets, command creation and lookup, idempotency conflicts, and retry after lost responses. Ensure integration tests cover cross-tenant list, trends, commands, pending polling and ACKs, as well as partial success for mixed-validity telemetry batches.
+
+## 7. Multi-day recovery and scale measurement
+
+- WAN loss leaves the Compose data path operational. A gateway/backend partition is absorbed by the gateway spool. Simulator/gateway isolation is absorbed by the simulator outbox. Size each queue to at least 10 decimal GB usable or 1.3 times measured seven-day on-disk growth, whichever is larger. Bound and monitor per-tenant allocation, total bytes, oldest-event age and disk headroom. Simulator downtime leaves a real gap for samples that were never generated.
+- On reconnect, share ingestion capacity between live and replay traffic with fair tenant scheduling. Target total commits of at least 4× steady load, leaving at least 3× steady capacity for backlog if live traffic remains constant. The recovery test targets a seven-day backlog drained within three days. Verify while trends are under representative load.
+- Take daily base backups and archive WAL continuously to the independent encrypted drive. Configure and monitor WAL segment archival lag, including during low throughput. Snapshot the two live SQLite databases with consistent backup tooling. Version a manifest with checksums, backup times, restore prerequisites and schema versions. Keep 30 days of recoverable backups through final verification. Measure backend RPO against the 15-minute target while archival is healthy and queue-volume RPO against the 24-hour snapshot target.
+- Restore into isolated volumes with writes and dispatch paused. Recover PostgreSQL to the selected point using a matching PostgreSQL major and TimescaleDB extension version. Restore queue snapshots, invalidate older pending commands, reconcile simulator state and replay recoverable events through the normal receipt ledger. Independently taken backups can expose gaps, so reconcile saved counters and report unrecoverable ranges. Verify chart repair, tenant isolation and command behavior before reopening traffic. Measure queryable-stack recovery against four hours and backlog clearance separately.
+- Before soaking, measure the receipt ledger, raw hypertable, indexes, aggregates, WAL, logging, both queues and independent backup usage. Report committed rates, rejects, retries and actual stored bytes, p95 ingest and trend timings, and CPU and RAM on days 1, 7 and 15. Use local dashboards and export CSV and Markdown. Recompute row count after measuring mean Protobuf payload size. At a mean of 90 bytes, the workload is approximately 129 readings/s and 167 million readings over 15 active days. Validate ledger growth and backup restore time early.
+
+### Failure modes by pipeline stage
+
+| Stage and failure | Detection | Recovery and verification |
+|---|---|---|
+| Simulator stops sampling, crashes or fills its outbox | Compare heartbeat and observation age; monitor disk and dropped samples | Mark stale or offline; resume from durable checkpoint, retry unsent messages, and reconcile genuine gaps. |
+| MQTT broker unavailable, restarted, or gateway subscription lost | Track reconnects, session changes and unreceipted event age | Restore checked-in broker config and registry-derived ACLs; reconnect, resubscribe and replay producer outbox. Test recovery with empty broker session state. |
+| Bad MQTT payload, topic mismatch or duplicate delivery | Count decode, validation, ACL and duplicate outcomes | Reject malformed or unauthorized frames. For a validly correlated duplicate, send the prior durable outcome or replay it safely. Record rejection by reason. |
+| Gateway spool unavailable or saturated | Monitor spool commits, bytes, oldest-event age and receipt lag | Withhold acceptance until the spool is writable. Apply retryable backpressure, restart or restore the spool, and replay from both queues as needed. |
+| Registry cannot refresh or credentials are revoked | Monitor snapshot age and auth failures | Admit known identities from the last verified snapshot during the partition. Keep new identities blocked until provisioned. Refresh ACLs and registry after reconnect and reconcile replay against backend authorization. |
+| Gateway/backend partition, timeout or lost batch response | Track retries, oldest-event age and backlog drain rate | Keep accepted data in SQLite. After reconnect replay with original IDs, reconcile outcomes and drain fairly alongside live traffic. |
+| Database down, commit ambiguous, disk full or volume corrupt | Track DB readiness, transaction errors, available space and WAL archive lag | Retry safely after capacity returns. For volume loss, restore base backup and WAL to fresh volumes and replay recoverable queues. Check receipt/reading consistency. |
+| Aggregate refresh delayed or older events arrive | Track refresh lag and repair queue depth | Show freshness and missing data explicitly. Repair affected buckets and compare rollups with raw readings. |
+| Command expires, ACK is lost, or a stale command arrives | Track ACK age, desired/reported state and command version | Retry while valid, apply each version once, reject stale or expired deliveries, and reconcile from the simulator’s stored applied version. |
+| Dashboard or proxy loses API access | Show failed requests and timestamp of last successful refresh | Retry bounded reads, show stale data for that tenant only, and block control actions until connectivity and authorization are confirmed. |
+| Backup drive offline or restore has missing WAL | Alert on backup age, archive gaps and checksum failures | Restore from the latest verifiable backup chain, replay available queues and report actual RPO and missing event ranges. |
+
+## 8. Observability and alerting
+
+Prometheus scrapes private metrics targets every 15 seconds and evaluates the rules in `observability/alerts.yml`. Spring Boot services expose Micrometer counters, gauges and latency histograms. Use broker metrics from Mosquitto's `$SYS` topics, a least-privilege PostgreSQL metrics exporter, Nginx request statistics and a laptop-side sampler for host sleep, disk and Docker resource usage. Keep the Prometheus data directory on a persistent volume with a 30-day retention setting and a size limit provisioned to hold that window based on the pilot. Report earlier eviction if the size limit is reached. Record UTC time and run ID in daily CSV exports so resource measurements can be aligned with incidents. [Prometheus alerting rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
+
+| Source | Signals |
+|---|---|
+| Simulator and MQTT broker | Expected and generated samples, paused/stale/offline counts, outbox usage, receipt age, reconnects, broker drops and client counts |
+| Gateway | Accepted, invalid and duplicate events, spool occupancy, oldest queued event, retry rate, registry snapshot age and live/replay throughput |
+| Java API and PostgreSQL | Unique committed rows and original payload bytes, rejects and conflicts, commit latency, database readiness, trend API latency/errors and aggregate freshness |
+| Control plane | Command outcomes, pending age and time to simulator ACK |
+| Containers, laptop and backup jobs | CPU, memory, restarts, storage headroom, WAL archive lag, verified snapshot age and backup target availability |
+
+Use bounded labels such as service, stage, outcome, reason class and sensor type. Use tenant labels for the bounded soak fleet or derive per-tenant totals from tenant-scoped counters persisted outside the metric series. Keep event, command and sensor IDs in diagnostic records and the registry/status store. Correlate gateway and backend errors with event or batch IDs and commands with command IDs. Log counts and state transitions during steady operation instead of writing a success log for every sample.
+
+### Initial alert policy
+
+Every rule records severity, affected stage, first detection time, current measurement, threshold and runbook reference. These defaults are configurable and will be validated against the pilot.
+
+| Signal | Threshold and severity | Local runbook action |
+|---|---|---|
+| Service or metrics target unavailable | Warning after 1 min; critical after 5 min for ingestion, database, or backup-path dependencies with sustained unavailability | Check container state and dependency health, then verify ingestion or backup activity resumed. |
+| Enabled sensor stops reporting | Status is stale after 10 s or offline after three missed five-second heartbeats. Warn if an enabled sensor remains stale or offline for 1 min. | Look up last observation, heartbeat and command state. Check simulator and MQTT connectivity. |
+| Queue usage or oldest event rises | Warning at 70% for 5 min or oldest event over 5 min; critical at 90% for 2 min, when a queue is full, or on any producer drops | Check failed hop, capacity and estimated time to fill. Restore the link, then watch replay drain and reconcile losses. |
+| Ingest or trend latency degrades | Warning if ingest p95 exceeds 3 s or trend p95 exceeds 500 ms for 5 min with enough observations; critical for a complete ingest stall lasting 5 min with enabled producers | Inspect transaction and proxy errors, spool backlog and database performance. |
+| Aggregate or control lag | Warning if scheduled refresh is over 5 min behind, or online command ACK p95 exceeds 5 s over a 5-min window with enough commands | Inspect refresh jobs or the command relay. Separate offline expiries from the online latency calculation. |
+| Capacity or recovery protection at risk | Warning if projected soak headroom falls below 10 GB. Critical at 5 GB remaining, WAL archive age above 15 min while WAL is pending, a failed backup checksum, or a required daily backup over 26 h old. | Free safe capacity or reconnect the independent backup target. Verify a recoverable backup chain. |
+
+Treat missing data as unknown or a scrape failure. Clear thresholds after their recovery condition is sustained for two evaluation intervals and use hysteresis for capacity signals. Suppress per-sensor notifications during a known broker or gateway outage while preserving sensor state in the dashboard. Record planned fault windows so the reports distinguish injected incidents and ordinary failures.
+
+### Log locations and operator access
+
+| Record | Location and retention |
+|---|---|
+| Runtime and access logs | Service stdout/stderr, collected by Docker and accessible with `docker compose logs --since … <service>`. Use structured JSON where supported, UTC timestamps and service/component, severity, reason and correlation fields. Start with `json-file`, `max-size: 20m` and `max-file: 5` per service. Export relevant excerpts during incidents before rotation removes them. |
+| Metrics and rule state | Prometheus persistent volume. Restrict the UI to a localhost-only operations interface. Export daily CSV summaries to `./run-artifacts/<run-id>/metrics/`. |
+| Alarm notifications | Alertmanager groups duplicates and sends firing/resolved webhook notifications to a local receiver independent of the Java API and TimescaleDB. Persist them idempotently in `alarms.sqlite` on a dedicated volume before returning HTTP success. Key incidents by alert fingerprint and start time. Record severity, state, onset, receipt and resolution timestamps and the runbook link. Retain at least 30 days and export `./run-artifacts/<run-id>/alarms.ndjson`. |
+| Commands and security audit | Tenant-scoped PostgreSQL audit tables record operator actions and command outcomes. Runtime logs record authentication failures with reason codes and minimal identifiers. Restrict audit reads to authorized users and omit credentials, cookies and raw telemetry. |
+| Soak and recovery evidence | Local ignored directory `./run-artifacts/<run-id>/` contains summaries, alarm exports, incident logs and backup or restore drill reports. Track its storage usage in disk forecasts. |
+
+Enable resolved notifications and seed an always-firing watchdog rule. Route the watchdog periodically to the local receiver and use a laptop-side check for stale deliveries while the laptop is awake. If the durable write fails, the receiver returns a retryable HTTP error so Alertmanager can retry delivery. If the receiver or its volume is unavailable, the watchdog records a monitoring gap when storage is restored. Expose live rules, grouped alerts and alarm history through a platform-operator-only local interface. Tenant operators see their sensor and command status in the product dashboard. A sleeping laptop cannot issue local alerts, so record the resulting gap after restart. Test the webhook and history during database downtime and check exports after container recreation. [Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/) · [Docker log rotation](https://docs.docker.com/engine/logging/drivers/json-file/)
+
+## 9. Fault injection test plan
+
+Start each scenario from a known fixture on an isolated Compose project with disposable volumes and seeded tenants A and B. Use a fault profile with a controllable clock for command expiry and injectable transport cut points for lost receipts and ACKs. Use shortened alert windows for CI and separately test the production rule durations with Prometheus rule tests. During the pilot, run with production windows and record actual wall-clock detection and recovery times. Clear the fault and reset fixture state before the next scenario. Restrict fault injection controls to the test profile.
+
+| Case and suite | Fault to inject | Expected behavior and recovery assertions |
+|---|---|---|
+| FT-01A · CI | Suppress readings for an enabled stream while continuing heartbeats, then stop its heartbeats | First stale, then offline after three missed heartbeats. Restart generation and verify the current status recovers and the chart retains a gap. Confirm a paused control stream does not raise the enabled-sensor warning. |
+| FT-01B · CI | Restart the broker with empty session state, then stop and restart the gateway subscriber. In a separate run, suppress a gateway application receipt after the spool commits. | Simulator retains events after transport PUBACK, resumes publishing after reconnect, and retries original IDs after the gateway resubscribes. Gateway re-enqueues safely or returns the prior durable result. After drain there is one reading per unique valid event. |
+| FT-01C · CI | Submit malformed Protobuf, missing fields, out-of-range oxygen, valid duplicate entries and a reused ID with changed content. Attempt a publish to the other tenant’s topic. | Broker rejects unauthorized publication. Gateway and backend reject malformed events at their own boundaries. Valid entries in a mixed batch commit, identical replay succeeds idempotently and modified content conflicts. Tenant B’s counts and results remain unchanged. |
+| FT-01D · CI | Stop the backend or database service while the simulator runs, then drop a batch response after confirmed commit in a separate run. | Spool survives restart. Backend retries do not duplicate rows. During DB downtime the alarm receiver remains writable, and the outage and resolved notifications survive receiver recreation. |
+| FT-01E · CI | Delay aggregate refresh and inject an older valid event within retention, including an event on a UTC bucket boundary. | Trends signal stale results. Repair the affected bucket and verify counts, weighted averages, bucket assignment and raw-tail boundaries against raw readings. |
+| FT-01F · CI | Drop the ACK for an applied pause, inject an expired enable request and deliver an older version after a newer command. | Applied version survives simulator restart. A valid retry returns the existing result, expired/stale commands do not change sampling, and a delivered heartbeat or ACK reconciles state. Cross-tenant dispatch is denied. |
+| FT-01G · Pilot | Cut WAN access while retaining Compose networking. Separately disconnect the gateway/backend link and exercise a seven-day-equivalent replay load as defined in AC-07. | Local ingest, trends and controls continue under WAN-only loss. A backend partition grows the gateway spool and triggers backlog alarms. Recover with per-tenant throttling. Measure elapsed time and verify the seven-day-equivalent backlog drains within the three-day target under live load. |
+| FT-01H · Pilot | Bound tenant A’s spool allocation to a small test quota and flood it, then use a small disposable volume to exercise total-capacity alarms. | Tenant A receives backpressure. Tenant B retains its reserved capacity. Verify warning and critical escalation, intentional drops match counters, queued acknowledged events remain intact, and alarms resolve after drain. |
+| FT-01I · Pilot | Disconnect the independent backup target or interrupt WAL archival; also test a checksum failure on a disposable copy. Restore to fresh volumes. | Alarm ledger records overdue or failed protection. Select the latest verifiable backup chain, restore database and queue snapshots, block old pending commands, and reconcile recovered data and tenant access. Record actual backend and queue RPO, queryable-stack restore time and backlog clearance separately. |
+| FT-01J · Pilot | Stop the alarm receiver or interrupt scraping, then restart services. Record one laptop sleep/resume gap. | Watchdog reports the missed delivery or scrape gap when detection is available. Alarm history remains readable on restart. Monitoring records the sleep interval as unknown and resumes evaluation after wake. |
+
+**Evidence.** Publish CI fault results and logs as test artifacts. Save pilot outputs under `./run-artifacts/<run-id>/fault-tests/<case-id>/` with the scenario manifest, assertion results, per-tenant counters, UTC timeline, alarm exports, logs and trend/control evidence. Label the injection window in the soak summary. Compare pre/post identity sets or event ranges on drain so discrepancies remain explainable even when counters reset. Fail a case if an expected alert, recovery invariant or tenant boundary is missing.
+
+## 10. Repository and implementation sequence
+
+| Milestone | Architecture deliverable |
+|---|---|
+| M0 | Pin tooling and verify image architecture support. Establish module layout, Compose networks and volumes, and the Invoice Intel-style `CI gate`. |
+| M1 | Add tenant identities and fixtures, telemetry schemas, deterministic simulator, SQLite queues, database migrations and idempotent ingest. Verify duplicate and isolation invariants before load testing. |
+| M2 | Add continuous aggregates, tail queries, historical bucket repair and React trends. Measure all four resolutions under concurrent ingest. |
+| M3 | Add acknowledged sensor controls, observability rules, the alarm ledger, failure injection, backup automation and a restore drill. |
+| M4 | Run calibration, 24-hour pilot and 15 active workload days. Record hardware, versions, configuration, interruptions and observed limits. |
+
+Use `backend/`, `gateway/`, `simulator/`, `contracts/`, `frontend/`, `perf/` and `scripts/`. Keep migration ownership with the backend. Store repeatable Compose commands and failure drills in the runbook. Verify all spec acceptance IDs through tests or experiment evidence. Apply the documented protected-trunk and squash-merge policy once the GitHub Actions gate is verified. [Invoice Intel CI policy](https://github.com/utkarshmankad/invoice-intel/blob/c62b77ab8dccabffa43323ac5ef5dc7573e9a50f/docs/ci.md)
+
+## Change history
+
+Record changes to design decisions, interfaces or operational behavior here in the same pull request as the edit. Add one entry per change request with its date or version, a short summary, and the affected IDs or sections when applicable. Use a PR or commit reference when available. When a request changes more than one document, record its effect in each affected file.
+
+| Baseline or change | Local commit | Design decisions recorded |
+|---|---|---|
+| v0.1 | `165ad55` | Established the Compose topology, technology choices, tenant-scoped storage, durable telemetry path, confirmed controls and multi-day recovery design. |
+| v0.2 | `7810f2c` | Added Mosquitto, MQTT topics and binary contracts, the database registry schema, an end-to-end data flow, and failure and recovery behavior by stage. |
+| v0.3 | `e30d4fb` | Defined Prometheus metrics and rules, Alertmanager routing, the independent SQLite alarm ledger, Docker log rotation and export locations. |
+| v0.4 | `ddf4e48` | Detailed ten CI and pilot fault scenarios with injection steps, expected outcomes and evidence locations. |
+| v0.5 | `af3a48d` | Defined browser API and internal gateway contracts, including authorization, errors, idempotency and contract verification. |
+| Documentation tracking | This revision | Added a record of design changes and the convention for future entries. |

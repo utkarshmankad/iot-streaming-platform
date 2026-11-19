@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pr-hygiene:
+    name: PR hygiene
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@2252a14e810aa9b85c2d560bd7070c802206ecf6 # v6.1.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            test
+            refactor
+            docs
+            build
+            chore
+            ci
+            perf
+            deps
+      - name: Check branch name
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [[ "$HEAD_REF" =~ ^dependabot/ ]]; then exit 0; fi
+          [[ "$HEAD_REF" =~ ^(feat|fix|test|refactor|docs|build|chore|ci|perf|deps)/[a-z0-9][a-z0-9._-]*$ ]]
+
+  repo-guards:
+    name: Repository guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check documentation and trunk configuration
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+
+          for name in ("specs.md", "architecture.md", "plan.md"):
+              content = Path(name).read_text()
+              assert content.startswith("# "), f"Missing document title: {name}"
+              assert "\n## Change history\n" in content, f"Missing change history: {name}"
+
+          ruleset = json.loads(Path(".github/rulesets/main.json").read_text())
+          assert ruleset["enforcement"] == "active"
+          assert ruleset["bypass_actors"] == []
+          rules = {rule["type"]: rule.get("parameters", {}) for rule in ruleset["rules"]}
+          assert {"deletion", "non_fast_forward", "required_linear_history"} <= rules.keys()
+          assert rules["pull_request"]["allowed_merge_methods"] == ["squash"]
+          assert rules["pull_request"]["required_review_thread_resolution"]
+          required = rules["required_status_checks"]
+          assert required["strict_required_status_checks_policy"]
+          assert any(check["context"] == "CI gate" for check in required["required_status_checks"])
+
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).decode().split("\0")
+          forbidden = [
+              name for name in tracked if name and (
+                  name.startswith(("run-artifacts/", "backups/")) or
+                  Path(name).name == ".env" or
+                  Path(name).suffix in {".sqlite", ".sqlite3", ".pem", ".key"}
+              )
+          ]
+          assert not forbidden, "Local state, credentials or run outputs are tracked"
+          PY
+      - name: Lint workflows
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint:1.7.12
+      - name: Scan for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: "false"
+
+  ci-gate:
+    name: CI gate
+    if: always()
+    needs: [pr-hygiene, repo-guards]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required bootstrap checks
+        env:
+          HYGIENE: ${{ needs.pr-hygiene.result }}
+          GUARDS: ${{ needs.repo-guards.result }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          printf 'Repository guards: %s\nPR hygiene: %s\n' "$GUARDS" "$HYGIENE"
+          [[ "$GUARDS" == success ]]
+          if [[ "$EVENT" == pull_request ]]; then
+            [[ "$HYGIENE" == success ]]
+          else
+            [[ "$HYGIENE" == skipped ]]
+          fi

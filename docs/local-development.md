@@ -1,0 +1,21 @@
+# Local development
+
+Clone the repository and start work from the current default branch:
+
+```sh
+git clone https://github.com/utkarshmankad/iot-streaming-platform.git
+cd iot-streaming-platform
+git switch main
+git pull --ff-only
+git switch -c docs/m0.1-example
+```
+
+The repository currently contains the design and bootstrap CI. M0.2 will pin the Java and frontend toolchains. M0.3 and M0.4 will add verified build, test and Compose commands.
+
+## Local configuration
+
+Use an untracked `.env` for service credentials and machine-specific settings. Once the stack defines its configuration, document settings in a checked-in `.env.example` with placeholders. Keep database and queue files in named volumes. Keep host-side backups under `backups/` or on the independent backup target. Store soak outputs under `run-artifacts/` and local runtime logs under `logs/`.
+
+## Pull requests
+
+Use one plan task per branch. Follow the branch naming and Conventional Commit rules in the plan. Include verification in the PR and check off the task when it is delivered. The required GitHub Actions check is `CI gate`.

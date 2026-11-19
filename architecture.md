@@ -1,6 +1,6 @@
 # Environmental IoT streaming platform architecture
 
-**Version 0.4 · Baseline specification v0.5**
+**Version 0.5 · Baseline specification v0.5**
 
 The platform is a single-laptop Docker Compose deployment. It runs six types of simulated sensors across at least two tenants, supports sampling controls from the browser, and is designed to ingest about 1 GB of unique telemetry bodies per active day over 15 days. Requirements and acceptance thresholds are defined in [specs.md](specs.md).
 
@@ -132,7 +132,64 @@ The operator submits an authenticated, CSRF-protected enable or pause request. I
 
 The UI distinguishes requested state, last confirmed state and connectivity. An enabled stream with healthy heartbeats but no new readings for ten seconds shows stale. Three missed five-second heartbeats show offline. Use event time for freshness so old replay cannot make a stale stream appear live. Surface pending, failed, expired and superseded commands. Use an explicit restore generation when reconciling command versions after point-in-time recovery so restored state cannot replay stale instructions.
 
-## 6. Multi-day recovery and scale measurement
+## 6. API specifications
+
+This section implements ING-01 through ING-04, UI-01 through UI-03, CTL-01 through CTL-02, and TEN-01 through TEN-03 in [specs.md](specs.md). Check in the browser OpenAPI contract under `contracts/openapi/` and the internal Protobuf messages under `contracts/proto/`.
+
+### Browser API
+
+The React dashboard sends same-origin JSON requests through Nginx. Every request uses the authenticated session and its active tenant. A tenant switch must be authorized against the operator's memberships before it updates the session. Viewers can read registry and trends, and operators can also issue commands. Require a CSRF token for session mutations and commands. Use ISO 8601 UTC timestamps in responses, opaque string IDs and stable machine-readable status codes. Return `Cache-Control: no-store` for authenticated responses.
+
+| Method and path | Request | Success response |
+|---|---|---|
+| `GET /api/v1/sensors` | Optional opaque `cursor` and `limit`, default 50 and maximum 200. Scope the cursor to the active tenant. | `200` with `items` and nullable `nextCursor`. Each item includes `sensorId`, `displayName`, `type`, `unit`, `samplingPeriodMs`, `desiredEnabled`, nullable `confirmedEnabled`, `connectivity` (`online\|offline\|unknown`), `sampleStatus` (`fresh\|stale\|paused\|unknown`), and nullable `lastObservedAt` and `lastHeartbeatAt`. |
+| `GET /api/v1/trends` | One to ten distinct repeated `sensorId` parameters, required `from`, `to`, and `bucket` (`15m\|1h\|1d\|1w`). The interval is `[from,to)`, with UTC-aligned boundaries, weeks starting Monday, and at most 30 days of retained history. Allow an aligned `to` at the end of the current bucket. | `200` with effective bounds, resolution, generation time, and `series`. Each series includes sensor ID, type, unit, and ordered buckets. Each bucket includes start, exclusive end, count, min, max, mean, and `partial`. Count zero yields null statistics. Include aggregate refresh timestamps and freshness state so the client can flag stale data. |
+| `POST /api/v1/sensors/{id}/commands` | `Idempotency-Key` header and JSON body `{"enabled":false}` or `{"enabled":true}`. | `202 Accepted` with `Location: /api/v1/commands/{commandId}` and a body containing `commandId`, `sensorId`, `version`, `requestedEnabled`, `status`, `createdAt` and `expiresAt`. The first response represents a durable request. The dashboard polls its status before showing confirmation. |
+| `GET /api/v1/commands/{id}` | Command ID from the create response. | `200` with command identity and requested state, `status` (`pending\|applied\|failed\|expired\|superseded`), nullable `confirmedEnabled`, nullable `resolvedAt` and optional `reasonCode`. An applied command requires a valid simulator acknowledgment. |
+
+Example trend request for an aligned two-bucket window:
+
+```http
+GET /api/v1/trends?sensorId=8c2c6f50-5a22-4ab8-a3c9-0068e560aa01&from=2026-11-20T00:00:00Z&to=2026-11-20T00:30:00Z&bucket=15m
+```
+
+A returned bucket has the following shape. The enclosing series identifies the sensor and measurement unit.
+
+```json
+{
+  "start": "2026-11-20T00:00:00Z",
+  "end": "2026-11-20T00:15:00Z",
+  "count": 900,
+  "min": 20.1,
+  "max": 22.3,
+  "mean": 21.4,
+  "partial": false
+}
+```
+
+Scope command idempotency keys to tenant, actor and sensor. Store the normalized request and command reference with the command transaction. Identical replays return the same command ID and original acceptance response, even if its status has since advanced. Reusing a key with a different requested state returns `409 IDEMPOTENCY_CONFLICT`. The default expiration is 60 seconds from creation. A sequence of commands can supersede pending requests. Status responses preserve the outcome for each command and cannot downgrade a newer confirmed sensor state.
+
+Errors use `{"code":"INVALID_BUCKET","message":"…","requestId":"…"}` with optional field-level details. Use `400` for invalid parameters, `401` for a missing or expired session, `403` for insufficient permissions or CSRF failure, `404` for an unknown or out-of-tenant resource, `409` for conflicts, `429` with `Retry-After` for throttling, and `503` for temporary service unavailability. For a trend request containing an unknown or out-of-tenant sensor, reject the entire request with the same generic `404`. The dashboard polls visible trends about every 15 seconds and backs off on temporary errors.
+
+### Internal gateway and backend API
+
+The following paths are internal to the Compose network. Authenticate every call with scoped gateway credentials and derive the gateway and its authorized tenants from those credentials. Requests and responses use Protobuf over HTTP. Use UTC epoch milliseconds for internal timestamps.
+
+| Method and path | Contract |
+|---|---|
+| `POST /internal/v1/telemetry/batches` | Batch of up to 250 entries, bounded by total message size. Each entry contains its correlation ID, authorized topic identity, original Protobuf telemetry bytes and gateway receipt timestamp. `200` returns one result per entry with `committed`, `duplicate` or `rejected` and a stable reason code for permanent rejection. Respond after the transaction commits. Use `400` for malformed batch envelopes, `413` for oversized batches, and `429` or `503` for transient failure. Retry timeout or transient outcomes with unchanged event IDs. Split an oversized batch and flag any individually oversized event. |
+| `GET /internal/v1/registry` | Returns a versioned snapshot of gateway assignments, active device and sensor IDs, type and accepted schema versions. Supports conditional retrieval by snapshot version. Gateway persists the last verified snapshot. |
+| `POST /internal/v1/sensor-heartbeats` | Sends bounded, gateway-scoped batches of heartbeat observations, including device and sensor identity, source time and last applied command version/state. Replayed observations do not move freshness backward. |
+| `GET /internal/v1/commands/pending` | Returns a bounded page of unexpired commands for the authenticated gateway with tenant/device/sensor identity, command ID, version, requested state and absolute expiry. Polling does not complete delivery. Commands remain eligible for retry until their state advances or they expire. |
+| `POST /internal/v1/commands/{id}/ack` | Reports command ID, sensor identity, version, actual state and device application timestamp. Duplicate valid ACKs are idempotent. Reject unauthorized or mismatched ACKs and prevent stale ACKs from overwriting newer state. |
+
+The simulator uses the MQTT topic contract in §3. A telemetry receipt carries event ID, fingerprint, outcome and optional reason code. A command carries command ID, version, desired state and expiry. A command ACK carries the applied version and reported state. Keep MQTT payload contracts versioned alongside the HTTP batch and control messages.
+
+### Contract verification
+
+Run OpenAPI and Protobuf schema validation in CI. Exercise tenant-scoped pagination, all four bucket sizes and boundaries, empty and partial buckets, command creation and lookup, idempotency conflicts, and retry after lost responses. Ensure integration tests cover cross-tenant list, trends, commands, pending polling and ACKs, as well as partial success for mixed-validity telemetry batches.
+
+## 7. Multi-day recovery and scale measurement
 
 - WAN loss leaves the Compose data path operational. A gateway/backend partition is absorbed by the gateway spool. Simulator/gateway isolation is absorbed by the simulator outbox. Size each queue to at least 10 decimal GB usable or 1.3 times measured seven-day on-disk growth, whichever is larger. Bound and monitor per-tenant allocation, total bytes, oldest-event age and disk headroom. Simulator downtime leaves a real gap for samples that were never generated.
 - On reconnect, share ingestion capacity between live and replay traffic with fair tenant scheduling. Target total commits of at least 4× steady load, leaving at least 3× steady capacity for backlog if live traffic remains constant. The recovery test targets a seven-day backlog drained within three days. Verify while trends are under representative load.
@@ -156,7 +213,7 @@ The UI distinguishes requested state, last confirmed state and connectivity. An 
 | Dashboard or proxy loses API access | Show failed requests and timestamp of last successful refresh | Retry bounded reads, show stale data for that tenant only, and block control actions until connectivity and authorization are confirmed. |
 | Backup drive offline or restore has missing WAL | Alert on backup age, archive gaps and checksum failures | Restore from the latest verifiable backup chain, replay available queues and report actual RPO and missing event ranges. |
 
-## 7. Observability and alerting
+## 8. Observability and alerting
 
 Prometheus scrapes private metrics targets every 15 seconds and evaluates the rules in `observability/alerts.yml`. Spring Boot services expose Micrometer counters, gauges and latency histograms. Use broker metrics from Mosquitto's `$SYS` topics, a least-privilege PostgreSQL metrics exporter, Nginx request statistics and a laptop-side sampler for host sleep, disk and Docker resource usage. Keep the Prometheus data directory on a persistent volume with a 30-day retention setting and a size limit provisioned to hold that window based on the pilot. Report earlier eviction if the size limit is reached. Record UTC time and run ID in daily CSV exports so resource measurements can be aligned with incidents. [Prometheus alerting rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
 
@@ -197,7 +254,7 @@ Treat missing data as unknown or a scrape failure. Clear thresholds after their 
 
 Enable resolved notifications and seed an always-firing watchdog rule. Route the watchdog periodically to the local receiver and use a laptop-side check for stale deliveries while the laptop is awake. If the durable write fails, the receiver returns a retryable HTTP error so Alertmanager can retry delivery. If the receiver or its volume is unavailable, the watchdog records a monitoring gap when storage is restored. Expose live rules, grouped alerts and alarm history through a platform-operator-only local interface. Tenant operators see their sensor and command status in the product dashboard. A sleeping laptop cannot issue local alerts, so record the resulting gap after restart. Test the webhook and history during database downtime and check exports after container recreation. [Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/) · [Docker log rotation](https://docs.docker.com/engine/logging/drivers/json-file/)
 
-## 8. Fault injection test plan
+## 9. Fault injection test plan
 
 Start each scenario from a known fixture on an isolated Compose project with disposable volumes and seeded tenants A and B. Use a fault profile with a controllable clock for command expiry and injectable transport cut points for lost receipts and ACKs. Use shortened alert windows for CI and separately test the production rule durations with Prometheus rule tests. During the pilot, run with production windows and record actual wall-clock detection and recovery times. Clear the fault and reset fixture state before the next scenario. Restrict fault injection controls to the test profile.
 
@@ -216,7 +273,7 @@ Start each scenario from a known fixture on an isolated Compose project with dis
 
 **Evidence.** Publish CI fault results and logs as test artifacts. Save pilot outputs under `./run-artifacts/<run-id>/fault-tests/<case-id>/` with the scenario manifest, assertion results, per-tenant counters, UTC timeline, alarm exports, logs and trend/control evidence. Label the injection window in the soak summary. Compare pre/post identity sets or event ranges on drain so discrepancies remain explainable even when counters reset. Fail a case if an expected alert, recovery invariant or tenant boundary is missing.
 
-## 9. Repository and implementation sequence
+## 10. Repository and implementation sequence
 
 | Milestone | Architecture deliverable |
 |---|---|

@@ -50,7 +50,7 @@ Publish only the frontend port on loopback. Use private Compose networks to sepa
 | Operations | Spring Boot Actuator and Micrometer for health and metrics. Capture local Prometheus metrics and host/container resource counters. Evaluate alert rules in Prometheus, route with Alertmanager, and store notifications in an independent SQLite alarm ledger. Use PostgreSQL base backups plus WAL archiving and SQLite Online Backup API snapshots. |
 | Verification | JUnit, ArchUnit, Testcontainers with the pinned Timescale image, Vitest and Playwright for the browser. Gatling measures the short CI workload. A separate local runner drives the calibration, pilot, soak and recovery profiles. |
 
-Verify exact dependency and image versions in the first implementation PR and record them in the wrapper, dependency locks and Compose image references. [Spring Boot requirements](https://docs.spring.io/spring-boot/system-requirements.html) · [SQLite durability settings](https://www.sqlite.org/pragma.html#pragma_synchronous) · [PostgreSQL continuous archiving](https://www.postgresql.org/docs/current/continuous-archiving.html)
+The M0.2 scaffold uses Temurin Java 25, Gradle 9.9.1, Spring Boot 4.1.2, Node 24.22.2, npm 11.19.1, React 19.3.1, TypeScript 7.0.2 and Vite 8.3.8. The wrapper and dependency locks capture the build dependencies. The Compose milestone uses `timescale/timescaledb:2.27.0-pg17` and `eclipse-mosquitto:2.0.22`, both available for Linux arm64 and amd64. [Spring Boot requirements](https://docs.spring.io/spring-boot/system-requirements.html) · [SQLite durability settings](https://www.sqlite.org/pragma.html#pragma_synchronous) · [PostgreSQL continuous archiving](https://www.postgresql.org/docs/current/continuous-archiving.html)
 
 ## 3. Telemetry data flow and idempotency
 
@@ -297,3 +297,4 @@ Record changes to design decisions, interfaces or operational behavior here in t
 | v0.4 | `ddf4e48` | Detailed ten CI and pilot fault scenarios with injection steps, expected outcomes and evidence locations. |
 | v0.5 | `af3a48d` | Defined browser API and internal gateway contracts, including authorization, errors, idempotency and contract verification. |
 | Documentation tracking | This revision | Added a record of design changes and the convention for future entries. |
+| M0.2 toolchain pins | This revision | Recorded exact scaffold dependency versions and selected PostgreSQL/TimescaleDB and Mosquitto images for the local and CI architectures. |

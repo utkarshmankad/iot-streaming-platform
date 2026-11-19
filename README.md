@@ -7,3 +7,4 @@ A laptop-local platform for simulated environmental sensors. The design sends bi
 - [Implementation plan](plan.md)
 - [Local setup](docs/local-development.md)
 - [Local Docker deployment](docs/local-deployment.md)
+- [Continuous integration](docs/ci.md)

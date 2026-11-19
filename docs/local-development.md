@@ -27,4 +27,4 @@ Use an untracked `.env` for service credentials and machine-specific settings. O
 
 ## Pull requests
 
-Use one plan task per branch. Follow the branch naming and Conventional Commit rules in the plan. Include verification in the PR and check off the task when it is delivered. The required GitHub Actions check is `CI gate`.
+Use one plan task per branch. Follow the branch naming and Conventional Commit rules in the plan. Include verification in the implementation PR. After it merges, use a separate documentation PR to check off the task in the plan. The required GitHub Actions check is `CI gate`.

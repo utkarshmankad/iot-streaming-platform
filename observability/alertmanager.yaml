@@ -1,0 +1,8 @@
+route:
+  receiver: local
+
+receivers:
+  - name: local
+    webhook_configs:
+      - url: http://alarm-receiver:8080/webhook
+        send_resolved: true

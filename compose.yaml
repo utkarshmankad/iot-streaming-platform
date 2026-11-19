@@ -1,0 +1,194 @@
+name: iot-platform-local
+
+x-healthcheck: &healthcheck
+  interval: 5s
+  timeout: 4s
+  retries: 24
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 20m
+    max-file: "5"
+
+x-java-environment: &java-environment
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,prometheus
+
+x-java: &java
+  profiles: [local, test]
+  logging: *logging
+  pull_policy: never
+  environment: *java-environment
+  healthcheck:
+    <<: *healthcheck
+    test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/actuator/health/readiness]
+
+services:
+  frontend:
+    profiles: [local, test]
+    logging: *logging
+    image: iot-platform-frontend:${IOT_STACK_IMAGE_TAG:-local}
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "127.0.0.1:${IOT_HTTP_PORT:-8080}:8080"
+    networks: [dashboard, ingress]
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+
+  backend:
+    <<: *java
+    image: iot-platform-backend:${IOT_STACK_IMAGE_TAG:-local}
+    build:
+      context: .
+      args:
+        SERVICE: backend
+    networks: [dashboard, gateway-api, database]
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  gateway:
+    <<: *java
+    image: iot-platform-gateway:${IOT_STACK_IMAGE_TAG:-local}
+    build:
+      context: .
+      args:
+        SERVICE: gateway
+    networks: [sensors, gateway-api]
+    volumes:
+      - gateway-spool:/var/lib/iot
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  simulator:
+    <<: *java
+    image: iot-platform-simulator:${IOT_STACK_IMAGE_TAG:-local}
+    build:
+      context: .
+      args:
+        SERVICE: simulator
+    networks: [sensors]
+    volumes:
+      - simulator-outbox:/var/lib/iot
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  timescaledb:
+    profiles: [local, test]
+    logging: *logging
+    image: timescale/timescaledb:2.27.0-pg17
+    environment:
+      POSTGRES_DB: iot
+      POSTGRES_USER: iot
+      POSTGRES_PASSWORD: ${IOT_STACK_DB_PASSWORD:?Run ./scripts/stack.sh local up or test up}
+      TIMESCALEDB_TELEMETRY: "off"
+    networks: [database]
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+
+  mosquitto:
+    profiles: [local, test]
+    logging: *logging
+    image: eclipse-mosquitto:2.0.22
+    user: "1883:1883"
+    environment:
+      MQTT_HEALTH_PASSWORD: ${IOT_STACK_MQTT_HEALTH_PASSWORD:?Run ./scripts/stack.sh local up or test up}
+    command:
+      - sh
+      - -ec
+      - |
+        umask 077
+        mosquitto_passwd -b -c /tmp/iot-stack-passwd scaffold_health "$$MQTT_HEALTH_PASSWORD"
+        exec mosquitto -c /mosquitto/config/stack.conf
+    networks: [sensors]
+    volumes:
+      - ./config/mosquitto/stack.conf:/mosquitto/config/stack.conf:ro
+      - ./config/mosquitto/stack.acl:/mosquitto/config/stack.acl:ro
+      - mqtt-data:/mosquitto/data
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD-SHELL, 'mosquitto_sub -h 127.0.0.1 -u scaffold_health -P "$$MQTT_HEALTH_PASSWORD" -t iot/scaffold/health -E -W 3']
+
+  prometheus:
+    profiles: [local, test]
+    logging: *logging
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+    networks: [monitoring, gateway-api, sensors]
+    volumes:
+      - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - metrics-data:/prometheus
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:9090/-/ready]
+
+  alertmanager:
+    profiles: [local, test]
+    logging: *logging
+    image: prom/alertmanager:v0.35.0
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --cluster.listen-address=
+    networks: [monitoring]
+    volumes:
+      - ./observability/alertmanager.yaml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:9093/-/ready]
+
+  alarm-receiver:
+    profiles: [local, test]
+    logging: *logging
+    image: nginx:1.30.2-alpine
+    networks: [monitoring]
+    volumes:
+      - ./config/nginx/alarm-receiver.conf:/etc/nginx/conf.d/default.conf:ro
+      - alarm-data:/var/lib/iot/alarms
+    healthcheck:
+      <<: *healthcheck
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+
+networks:
+  ingress:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.enable_ip_masquerade: "false"
+  dashboard:
+    internal: true
+  gateway-api:
+    internal: true
+  sensors:
+    internal: true
+  database:
+    internal: true
+  monitoring:
+    internal: true
+
+volumes:
+  database: {}
+  mqtt-data: {}
+  gateway-spool: {}
+  simulator-outbox: {}
+  metrics-data: {}
+  alertmanager-data: {}
+  alarm-data: {}

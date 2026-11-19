@@ -4,6 +4,7 @@ import org.gradle.api.tasks.SourceSetContainer
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 import org.gradle.jvm.toolchain.JvmVendorSpec
+import org.springframework.boot.gradle.tasks.bundling.BootJar
 
 plugins {
     id("com.diffplug.spotless") version "8.11.0" apply false
@@ -55,13 +56,19 @@ subprojects {
         shouldRunAfter(tasks.named("test"))
     }
 
+    tasks.named<BootJar>("bootJar") {
+        archiveFileName.set("application.jar")
+    }
+
     dependencyLocking {
         lockAllConfigurations()
     }
 
     dependencies {
         add("implementation", platform("org.springframework.boot:spring-boot-dependencies:4.1.2"))
-        add("implementation", "org.springframework.boot:spring-boot-starter")
+        add("implementation", "org.springframework.boot:spring-boot-starter-webmvc")
+        add("implementation", "org.springframework.boot:spring-boot-starter-actuator")
+        add("runtimeOnly", "io.micrometer:micrometer-registry-prometheus")
         add("testImplementation", "org.junit.jupiter:junit-jupiter")
         add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher")
     }

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-scan_dir="$(mktemp -d)"
+scan_dir="$(mktemp -d "${RUNNER_TEMP:?}/image-scan.XXXXXX")"
 trap 'rm -f "$scan_dir/image.tar"; rmdir "$scan_dir"' EXIT
-cache_dir="${RUNNER_TEMP:?}/trivy-cache"
+cache_dir="$RUNNER_TEMP/trivy-cache"
 mkdir -p "$cache_dir"
 
 for service in backend gateway simulator frontend; do

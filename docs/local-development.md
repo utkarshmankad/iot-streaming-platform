@@ -10,7 +10,16 @@ git pull --ff-only
 git switch -c docs/m0.1-example
 ```
 
-The repository currently contains the design and bootstrap CI. M0.2 will pin the Java and frontend toolchains. M0.3 and M0.4 will add verified build, test and Compose commands.
+Install Temurin 25, Node 24.22.2 and npm 11.19.1. Use the checked-in Gradle Wrapper and dependency locks.
+
+```sh
+./gradlew build
+npm --prefix frontend ci
+npm --prefix frontend run build
+npm --prefix frontend run dev -- --host 127.0.0.1
+```
+
+The Java build produces executable Spring Boot JARs for the backend, gateway and simulator. The frontend build writes to `frontend/dist/`. M0.3 and M0.4 will add the full environment and Compose commands.
 
 ## Local configuration
 

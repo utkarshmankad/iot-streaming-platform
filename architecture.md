@@ -37,6 +37,8 @@ flowchart LR
 
 Publish only the frontend port on loopback. Use private Compose networks to separate the browser proxy, sensor MQTT network, gateway/backend link and database. The gateway is the simulator’s ingress and command relay. The backend is the sole application service with database access. Backup tooling has a dedicated database role and writes to a mounted independent drive. Use separate named volumes for the database, spool and outbox. Give Compose services health checks and use readiness probes to verify dependencies. Startup and restart must tolerate dependencies coming up in any order.
 
+For development, `compose.dev.yaml` provides TimescaleDB and an authenticated Mosquitto instance on configurable loopback ports. The Java services and Vite run on the host for debugging and hot reload. The development database has its own named volume. The deployment topology above keeps those dependency ports internal.
+
 ## 2. Technology choices
 
 | Area | Choice and rationale |
@@ -298,3 +300,4 @@ Record changes to design decisions, interfaces or operational behavior here in t
 | v0.5 | `af3a48d` | Defined browser API and internal gateway contracts, including authorization, errors, idempotency and contract verification. |
 | Documentation tracking | This revision | Added a record of design changes and the convention for future entries. |
 | M0.2 toolchain pins | This revision | Recorded exact scaffold dependency versions and selected PostgreSQL/TimescaleDB and Mosquitto images for the local and CI architectures. |
+| M0.3 development environment | This revision | Added a loopback-only database and MQTT development profile, generated local credentials, and host-side build, test and debugging workflows. |

@@ -1,6 +1,6 @@
 # Environmental IoT streaming platform architecture
 
-**Version 0.2 · Baseline specification v0.3**
+**Version 0.3 · Baseline specification v0.4**
 
 The platform is a single-laptop Docker Compose deployment. It runs six types of simulated sensors across at least two tenants, supports sampling controls from the browser, and is designed to ingest about 1 GB of unique telemetry bodies per active day over 15 days. Requirements and acceptance thresholds are defined in [specs.md](specs.md).
 
@@ -47,7 +47,7 @@ Publish only the frontend port on loopback. Use private Compose networks to sepa
 | Transport | MQTT 5 over TCP with binary Protobuf for the sensor link. HTTP with bounded Protobuf batch bodies between gateway and backend. HTTP JSON for the browser API. The application outbox and spool own multi-day durability. |
 | Database | PostgreSQL with the TimescaleDB extension for the reading hypertable and 15-minute continuous aggregate. Select and pin a compatible PostgreSQL/TimescaleDB image pair after checking native arm64 and amd64 support in M0. Keep retention and compression settings explicit and record changes in benchmark runs. |
 | Frontend | React, TypeScript, Vite, Apache ECharts and TanStack Query for charting, query caching and polling. Nginx serves static assets and proxies API traffic. Use tenant-aware query keys and clear in-flight results when tenants switch. |
-| Operations | Spring Boot Actuator and Micrometer for health and metrics. Capture local Prometheus metrics and Docker resource counters for the soak. Use PostgreSQL base backups plus WAL archiving and SQLite Online Backup API snapshots. |
+| Operations | Spring Boot Actuator and Micrometer for health and metrics. Capture local Prometheus metrics and host/container resource counters. Evaluate alert rules in Prometheus, route with Alertmanager, and store notifications in an independent SQLite alarm ledger. Use PostgreSQL base backups plus WAL archiving and SQLite Online Backup API snapshots. |
 | Verification | JUnit, ArchUnit, Testcontainers with the pinned Timescale image, Vitest and Playwright for the browser. Gatling measures the short CI workload. A separate local runner drives the calibration, pilot, soak and recovery profiles. |
 
 Verify exact dependency and image versions in the first implementation PR and record them in the wrapper, dependency locks and Compose image references. [Spring Boot requirements](https://docs.spring.io/spring-boot/system-requirements.html) · [SQLite durability settings](https://www.sqlite.org/pragma.html#pragma_synchronous) · [PostgreSQL continuous archiving](https://www.postgresql.org/docs/current/continuous-archiving.html)
@@ -156,14 +156,55 @@ The UI distinguishes requested state, last confirmed state and connectivity. An 
 | Dashboard or proxy loses API access | Show failed requests and timestamp of last successful refresh | Retry bounded reads, show stale data for that tenant only, and block control actions until connectivity and authorization are confirmed. |
 | Backup drive offline or restore has missing WAL | Alert on backup age, archive gaps and checksum failures | Restore from the latest verifiable backup chain, replay available queues and report actual RPO and missing event ranges. |
 
-## 7. Repository and implementation sequence
+## 7. Observability and alerting
+
+Prometheus scrapes private metrics targets every 15 seconds and evaluates the rules in `observability/alerts.yml`. Spring Boot services expose Micrometer counters, gauges and latency histograms. Use broker metrics from Mosquitto's `$SYS` topics, a least-privilege PostgreSQL metrics exporter, Nginx request statistics and a laptop-side sampler for host sleep, disk and Docker resource usage. Keep the Prometheus data directory on a persistent volume with a 30-day retention setting and a size limit provisioned to hold that window based on the pilot. Report earlier eviction if the size limit is reached. Record UTC time and run ID in daily CSV exports so resource measurements can be aligned with incidents. [Prometheus alerting rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
+
+| Source | Signals |
+|---|---|
+| Simulator and MQTT broker | Expected and generated samples, paused/stale/offline counts, outbox usage, receipt age, reconnects, broker drops and client counts |
+| Gateway | Accepted, invalid and duplicate events, spool occupancy, oldest queued event, retry rate, registry snapshot age and live/replay throughput |
+| Java API and PostgreSQL | Unique committed rows and original payload bytes, rejects and conflicts, commit latency, database readiness, trend API latency/errors and aggregate freshness |
+| Control plane | Command outcomes, pending age and time to simulator ACK |
+| Containers, laptop and backup jobs | CPU, memory, restarts, storage headroom, WAL archive lag, verified snapshot age and backup target availability |
+
+Use bounded labels such as service, stage, outcome, reason class and sensor type. Use tenant labels for the bounded soak fleet or derive per-tenant totals from tenant-scoped counters persisted outside the metric series. Keep event, command and sensor IDs in diagnostic records and the registry/status store. Correlate gateway and backend errors with event or batch IDs and commands with command IDs. Log counts and state transitions during steady operation instead of writing a success log for every sample.
+
+### Initial alert policy
+
+Every rule records severity, affected stage, first detection time, current measurement, threshold and runbook reference. These defaults are configurable and will be validated against the pilot.
+
+| Signal | Threshold and severity | Local runbook action |
+|---|---|---|
+| Service or metrics target unavailable | Warning after 1 min; critical after 5 min for ingestion, database, or backup-path dependencies with sustained unavailability | Check container state and dependency health, then verify ingestion or backup activity resumed. |
+| Enabled sensor stops reporting | Status is stale after 10 s or offline after three missed five-second heartbeats. Warn if an enabled sensor remains stale or offline for 1 min. | Look up last observation, heartbeat and command state. Check simulator and MQTT connectivity. |
+| Queue usage or oldest event rises | Warning at 70% for 5 min or oldest event over 5 min; critical at 90% for 2 min, when a queue is full, or on any producer drops | Check failed hop, capacity and estimated time to fill. Restore the link, then watch replay drain and reconcile losses. |
+| Ingest or trend latency degrades | Warning if ingest p95 exceeds 3 s or trend p95 exceeds 500 ms for 5 min with enough observations; critical for a complete ingest stall lasting 5 min with enabled producers | Inspect transaction and proxy errors, spool backlog and database performance. |
+| Aggregate or control lag | Warning if scheduled refresh is over 5 min behind, or online command ACK p95 exceeds 5 s over a 5-min window with enough commands | Inspect refresh jobs or the command relay. Separate offline expiries from the online latency calculation. |
+| Capacity or recovery protection at risk | Warning if projected soak headroom falls below 10 GB. Critical at 5 GB remaining, WAL archive age above 15 min while WAL is pending, a failed backup checksum, or a required daily backup over 26 h old. | Free safe capacity or reconnect the independent backup target. Verify a recoverable backup chain. |
+
+Treat missing data as unknown or a scrape failure. Clear thresholds after their recovery condition is sustained for two evaluation intervals and use hysteresis for capacity signals. Suppress per-sensor notifications during a known broker or gateway outage while preserving sensor state in the dashboard. Record planned fault windows so the reports distinguish injected incidents and ordinary failures.
+
+### Log locations and operator access
+
+| Record | Location and retention |
+|---|---|
+| Runtime and access logs | Service stdout/stderr, collected by Docker and accessible with `docker compose logs --since … <service>`. Use structured JSON where supported, UTC timestamps and service/component, severity, reason and correlation fields. Start with `json-file`, `max-size: 20m` and `max-file: 5` per service. Export relevant excerpts during incidents before rotation removes them. |
+| Metrics and rule state | Prometheus persistent volume. Restrict the UI to a localhost-only operations interface. Export daily CSV summaries to `./run-artifacts/<run-id>/metrics/`. |
+| Alarm notifications | Alertmanager groups duplicates and sends firing/resolved webhook notifications to a local receiver independent of the Java API and TimescaleDB. Persist them idempotently in `alarms.sqlite` on a dedicated volume before returning HTTP success. Key incidents by alert fingerprint and start time. Record severity, state, onset, receipt and resolution timestamps and the runbook link. Retain at least 30 days and export `./run-artifacts/<run-id>/alarms.ndjson`. |
+| Commands and security audit | Tenant-scoped PostgreSQL audit tables record operator actions and command outcomes. Runtime logs record authentication failures with reason codes and minimal identifiers. Restrict audit reads to authorized users and omit credentials, cookies and raw telemetry. |
+| Soak and recovery evidence | Local ignored directory `./run-artifacts/<run-id>/` contains summaries, alarm exports, incident logs and backup or restore drill reports. Track its storage usage in disk forecasts. |
+
+Enable resolved notifications and seed an always-firing watchdog rule. Route the watchdog periodically to the local receiver and use a laptop-side check for stale deliveries while the laptop is awake. If the durable write fails, the receiver returns a retryable HTTP error so Alertmanager can retry delivery. If the receiver or its volume is unavailable, the watchdog records a monitoring gap when storage is restored. Expose live rules, grouped alerts and alarm history through a platform-operator-only local interface. Tenant operators see their sensor and command status in the product dashboard. A sleeping laptop cannot issue local alerts, so record the resulting gap after restart. Test the webhook and history during database downtime and check exports after container recreation. [Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/) · [Docker log rotation](https://docs.docker.com/engine/logging/drivers/json-file/)
+
+## 8. Repository and implementation sequence
 
 | Milestone | Architecture deliverable |
 |---|---|
 | M0 | Pin tooling and verify image architecture support. Establish module layout, Compose networks and volumes, and the Invoice Intel-style `CI gate`. |
 | M1 | Add tenant identities and fixtures, telemetry schemas, deterministic simulator, SQLite queues, database migrations and idempotent ingest. Verify duplicate and isolation invariants before load testing. |
 | M2 | Add continuous aggregates, tail queries, historical bucket repair and React trends. Measure all four resolutions under concurrent ingest. |
-| M3 | Add acknowledged sensor controls, status monitoring, failure injection, backup automation and a restore drill. |
+| M3 | Add acknowledged sensor controls, observability rules, the alarm ledger, failure injection, backup automation and a restore drill. |
 | M4 | Run calibration, 24-hour pilot and 15 active workload days. Record hardware, versions, configuration, interruptions and observed limits. |
 
 Use `backend/`, `gateway/`, `simulator/`, `contracts/`, `frontend/`, `perf/` and `scripts/`. Keep migration ownership with the backend. Store repeatable Compose commands and failure drills in the runbook. Verify all spec acceptance IDs through tests or experiment evidence. Apply the documented protected-trunk and squash-merge policy once the GitHub Actions gate is verified. [Invoice Intel CI policy](https://github.com/utkarshmankad/invoice-intel/blob/c62b77ab8dccabffa43323ac5ef5dc7573e9a50f/docs/ci.md)

@@ -1,6 +1,6 @@
 # Environmental IoT streaming platform
 
-**Version 0.3 · Implementation specification**
+**Version 0.4 · Implementation specification**
 
 ## 1. Scope and workload
 
@@ -48,6 +48,13 @@
 | Duplicate, expired or out-of-order control requests | Apply a valid command once. Reject stale deliveries and reconcile reported state after reconnect or restore. |
 | One tenant floods ingress or trends | Enforce per-tenant limits and fair scheduling so other tenants retain queue capacity and access. |
 
+### Observability, alerts and alarms
+
+- **OBS-01.** Monitor generated, accepted and committed counts and bytes, validation failures, duplicates, drops, MQTT reconnects and receipt age, queue depth and oldest event age, database commit latency, trend freshness and query latency, command outcomes and ACK latency, backup and WAL age, and host/container resource consumption. Track reading freshness separately from heartbeats. Retain local metrics for at least 30 days and export daily snapshots for the soak report.
+- **OBS-02.** Keep a warning and critical severity policy with threshold, duration, recovery condition and runbook action. Raise warnings for stalled delivery, reduced ingest, stale aggregates or capacity pressure. Raise critical alarms for data loss, sustained outages, exhausted queues, disk risk or backup failures. Show per-sensor stale/offline status to authorized tenants. Keep platform metrics, alerts and configuration restricted to platform operators.
+- **OBS-03.** Write runtime logs as structured container output where supported. Retrieve them with `docker compose logs` and enforce per-service rotation. Keep command audit events in tenant-scoped PostgreSQL records. Save firing and resolved alarm notifications to a separate local persistent ledger that remains writable during a TimescaleDB outage. Export alarm history and diagnostic logs to the designated soak directory. Redact telemetry values, secrets and credentials.
+- **OBS-04.** Alerting and history must work during internet loss. Expose missing metrics or a stale alarm receiver as unknown/degraded. Record monitoring gaps during laptop sleep or shutdown on restart. During the pilot, inject faults and verify trigger timing, local visibility, resolution, deduplication and persistence across restarts.
+
 ## 5. Multi-tenancy
 
 - **TEN-01.** Require an authenticated tenant context on every data-plane and operator request. Operators can access only their assigned tenants. Resolve active tenant from an authorized membership, and gateway and simulator tenant scope from service credentials. Each tenant has its own sensor registry, events, commands, audit trail and trends. Include `tenant_id` in resource keys, relationships, queue records, cache keys, deduplication and aggregate grouping. The same sensor and event IDs may exist independently across tenants.
@@ -68,6 +75,7 @@
 | AC-08 | Restore from the independent backup into fresh volumes, measure RPO and restore time, reconcile commands and verify tenant isolation. |
 | AC-09 | For all six sensor types, submit valid and invalid events, including a mixed batch. Concurrently replay a valid event and reuse its ID with modified content. Verify one committed row, duplicate success for unchanged payloads and explicit conflict for changed payloads. |
 | AC-10 | Restart the MQTT broker and simulate a lost application receipt after spool commit. Verify that the producer keeps its outbox until gateway receipt, replays unchanged bytes, and yields one committed event. Verify tenant topic ACLs and binary message validation. |
+| AC-11 | Induce a gateway/backend partition, a full-queue condition and an overdue backup. Verify warning/critical transitions, alert recovery, durable local history during database downtime and tenant access boundaries. |
 
 Implementation sequence: M0 repository, rules and Compose skeleton; M1 tenant identity and isolation, simulator, durable gateway and Java/Timescale ingest; M2 aggregated API and React trends; M3 acknowledged sensor controls and fault tests; M4 calibration, pilot, soak and report. Split milestones into single-task PRs and track them in `plan.md`. Suggested source paths: `simulator/`, `gateway/`, `backend/`, `frontend/`, `perf/` and `scripts/`.
 

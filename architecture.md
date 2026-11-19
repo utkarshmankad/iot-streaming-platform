@@ -1,6 +1,6 @@
 # Environmental IoT streaming platform architecture
 
-**Version 0.3 · Baseline specification v0.4**
+**Version 0.4 · Baseline specification v0.5**
 
 The platform is a single-laptop Docker Compose deployment. It runs six types of simulated sensors across at least two tenants, supports sampling controls from the browser, and is designed to ingest about 1 GB of unique telemetry bodies per active day over 15 days. Requirements and acceptance thresholds are defined in [specs.md](specs.md).
 
@@ -197,7 +197,26 @@ Treat missing data as unknown or a scrape failure. Clear thresholds after their 
 
 Enable resolved notifications and seed an always-firing watchdog rule. Route the watchdog periodically to the local receiver and use a laptop-side check for stale deliveries while the laptop is awake. If the durable write fails, the receiver returns a retryable HTTP error so Alertmanager can retry delivery. If the receiver or its volume is unavailable, the watchdog records a monitoring gap when storage is restored. Expose live rules, grouped alerts and alarm history through a platform-operator-only local interface. Tenant operators see their sensor and command status in the product dashboard. A sleeping laptop cannot issue local alerts, so record the resulting gap after restart. Test the webhook and history during database downtime and check exports after container recreation. [Alertmanager](https://prometheus.io/docs/alerting/latest/alertmanager/) · [Docker log rotation](https://docs.docker.com/engine/logging/drivers/json-file/)
 
-## 8. Repository and implementation sequence
+## 8. Fault injection test plan
+
+Start each scenario from a known fixture on an isolated Compose project with disposable volumes and seeded tenants A and B. Use a fault profile with a controllable clock for command expiry and injectable transport cut points for lost receipts and ACKs. Use shortened alert windows for CI and separately test the production rule durations with Prometheus rule tests. During the pilot, run with production windows and record actual wall-clock detection and recovery times. Clear the fault and reset fixture state before the next scenario. Restrict fault injection controls to the test profile.
+
+| Case and suite | Fault to inject | Expected behavior and recovery assertions |
+|---|---|---|
+| FT-01A · CI | Suppress readings for an enabled stream while continuing heartbeats, then stop its heartbeats | First stale, then offline after three missed heartbeats. Restart generation and verify the current status recovers and the chart retains a gap. Confirm a paused control stream does not raise the enabled-sensor warning. |
+| FT-01B · CI | Restart the broker with empty session state, then stop and restart the gateway subscriber. In a separate run, suppress a gateway application receipt after the spool commits. | Simulator retains events after transport PUBACK, resumes publishing after reconnect, and retries original IDs after the gateway resubscribes. Gateway re-enqueues safely or returns the prior durable result. After drain there is one reading per unique valid event. |
+| FT-01C · CI | Submit malformed Protobuf, missing fields, out-of-range oxygen, valid duplicate entries and a reused ID with changed content. Attempt a publish to the other tenant’s topic. | Broker rejects unauthorized publication. Gateway and backend reject malformed events at their own boundaries. Valid entries in a mixed batch commit, identical replay succeeds idempotently and modified content conflicts. Tenant B’s counts and results remain unchanged. |
+| FT-01D · CI | Stop the backend or database service while the simulator runs, then drop a batch response after confirmed commit in a separate run. | Spool survives restart. Backend retries do not duplicate rows. During DB downtime the alarm receiver remains writable, and the outage and resolved notifications survive receiver recreation. |
+| FT-01E · CI | Delay aggregate refresh and inject an older valid event within retention, including an event on a UTC bucket boundary. | Trends signal stale results. Repair the affected bucket and verify counts, weighted averages, bucket assignment and raw-tail boundaries against raw readings. |
+| FT-01F · CI | Drop the ACK for an applied pause, inject an expired enable request and deliver an older version after a newer command. | Applied version survives simulator restart. A valid retry returns the existing result, expired/stale commands do not change sampling, and a delivered heartbeat or ACK reconciles state. Cross-tenant dispatch is denied. |
+| FT-01G · Pilot | Cut WAN access while retaining Compose networking. Separately disconnect the gateway/backend link and exercise a seven-day-equivalent replay load as defined in AC-07. | Local ingest, trends and controls continue under WAN-only loss. A backend partition grows the gateway spool and triggers backlog alarms. Recover with per-tenant throttling. Measure elapsed time and verify the seven-day-equivalent backlog drains within the three-day target under live load. |
+| FT-01H · Pilot | Bound tenant A’s spool allocation to a small test quota and flood it, then use a small disposable volume to exercise total-capacity alarms. | Tenant A receives backpressure. Tenant B retains its reserved capacity. Verify warning and critical escalation, intentional drops match counters, queued acknowledged events remain intact, and alarms resolve after drain. |
+| FT-01I · Pilot | Disconnect the independent backup target or interrupt WAL archival; also test a checksum failure on a disposable copy. Restore to fresh volumes. | Alarm ledger records overdue or failed protection. Select the latest verifiable backup chain, restore database and queue snapshots, block old pending commands, and reconcile recovered data and tenant access. Record actual backend and queue RPO, queryable-stack restore time and backlog clearance separately. |
+| FT-01J · Pilot | Stop the alarm receiver or interrupt scraping, then restart services. Record one laptop sleep/resume gap. | Watchdog reports the missed delivery or scrape gap when detection is available. Alarm history remains readable on restart. Monitoring records the sleep interval as unknown and resumes evaluation after wake. |
+
+**Evidence.** Publish CI fault results and logs as test artifacts. Save pilot outputs under `./run-artifacts/<run-id>/fault-tests/<case-id>/` with the scenario manifest, assertion results, per-tenant counters, UTC timeline, alarm exports, logs and trend/control evidence. Label the injection window in the soak summary. Compare pre/post identity sets or event ranges on drain so discrepancies remain explainable even when counters reset. Fail a case if an expected alert, recovery invariant or tenant boundary is missing.
+
+## 9. Repository and implementation sequence
 
 | Milestone | Architecture deliverable |
 |---|---|

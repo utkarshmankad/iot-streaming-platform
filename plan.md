@@ -74,6 +74,8 @@ Use a separate checkout for implementation. The hourly runner fetches and fast-f
 
 Record validated work discovered during implementation with a stable ID, originating task or PR, expected outcome, and dependencies. Use checklist entries. The hourly runner can select an actionable follow-up after earlier eligible milestone tasks. A follow-up requiring an owner decision stays blocked until the decision is recorded.
 
+- [ ] **FU-01 · Nightly mutation testing.** Origin: M0.5. After M1.4 and M3.1 add PIT coverage for the critical ingestion and command code to the nightly workflow and retain its report. Validate the scheduled run in M3.5. *(CI-03)*
+
 ## Change history
 
 Record changes to milestone sequence, tasks or exit gates here in the same pull request as the edit. Add one entry per change request with its date or version, a short summary, and the affected IDs or sections when applicable. Use a PR or commit reference when available. When a request changes more than one document, record its effect in each affected file.
@@ -89,3 +91,4 @@ Record changes to milestone sequence, tasks or exit gates here in the same pull 
 | M0.3 development environment | [PR #5](https://github.com/utkarshmankad/iot-streaming-platform/pull/5) | Completed after the implementation merged. Verified a clean build, backend startup test, and authenticated loopback development services. |
 | M0.4 local deployment environment | [PR #7](https://github.com/utkarshmankad/iot-streaming-platform/pull/7) | Completed after merge. Verified nine healthy services, bounded logs, internal networking and offline recreation with retained database and spool data. |
 | M0.5 PR pipeline | This revision | Added the requested CI stages and wired them into the required gate. Documented the initial scaffold coverage and performance policies. |
+| M0.5 nightly scan | This revision | Scheduled fresh image scans outside the merge gate. Tracked mutation testing once ingestion and command code is available. |

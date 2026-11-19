@@ -246,15 +246,7 @@ jobs:
         env:
           COMPOSE_PARALLEL_LIMIT: '1'
       - name: Scan the application images for fixable high and critical findings
-        run: |
-          scan_dir="$(mktemp -d)"
-          mkdir -p "$RUNNER_TEMP/trivy-cache"
-          for service in backend gateway simulator frontend; do
-            docker save -o "$scan_dir/image.tar" "iot-platform-${service}:test"
-            docker run --rm -v "$scan_dir:/scan:ro" -v "$RUNNER_TEMP/trivy-cache:/root/.cache/trivy" \
-              aquasec/trivy:0.76.2 image --input /scan/image.tar --scanners vuln \
-              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
-          done
+        run: bash scripts/ci/scan-images.sh
       - name: Package the scanned images
         run: |
           docker save iot-platform-{backend,gateway,simulator,frontend}:test | gzip > stack-images.tar.gz

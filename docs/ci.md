@@ -21,6 +21,8 @@ GitHub Actions runs on pull requests to `main`, pushes to `main`, and manual dis
 
 The coverage threshold applies once there is measurable application code. The only exclusions are the three Spring Boot launcher classes. A checkout containing other Java classes requires coverage data, and the verification fails below 85%. Test and report artifacts are retained for 14 days. The image archive used by runtime jobs is retained for one day.
 
+The separate `Nightly` workflow rebuilds and rescans the application images at 03:00 IST. Its status is outside the required PR gate. Mutation testing will join the scheduled workflow after critical ingestion and command code is available.
+
 Run the checks from a clean checkout:
 
 ```sh

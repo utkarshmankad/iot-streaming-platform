@@ -1,0 +1,23 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: '30 21 * * *' # 03:00 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    name: Rebuild and rescan application images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: ./scripts/stack.sh test build
+        env:
+          COMPOSE_PARALLEL_LIMIT: '1'
+      - run: bash scripts/ci/scan-images.sh

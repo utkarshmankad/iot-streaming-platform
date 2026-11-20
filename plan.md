@@ -74,13 +74,15 @@ Use a separate checkout for implementation. The hourly runner fetches and fast-f
 
 Record validated work discovered during implementation with a stable ID, originating task or PR, expected outcome, and dependencies. Use checklist entries. The hourly runner can select an actionable follow-up after earlier eligible milestone tasks. A follow-up requiring an owner decision stays blocked until the decision is recorded.
 
-- [ ] **FU-01 · Nightly mutation testing.** Origin: M0.5. After M1.4 and M3.1 add PIT coverage for the critical ingestion and command code to the nightly workflow and retain its report. Validate the scheduled run in M3.5. *(CI-03)*
+- [x] **FU-01 · Nightly mutation testing.** Origin: M0.5. After M1.4 and M3.1 add PIT coverage for the critical ingestion and command code to the nightly workflow and retain its report. Validate the scheduled run in M3.5. *(CI-03)*
 
 - [ ] **FU-02 · Reuse Gradle downloads in local image builds.** Origin: M1.4. After M1.5, verify that the laptop’s Compose build reuses one pinned Gradle download and shared Java build inputs for the three service images. Exercise both clean and warm builds and keep the existing offline recreation path. *(OPS-01, CI-01)*
 
 - [ ] **FU-03 · Local two-host ARM64 Compose profiles.** Origin: M3.2 verification and the approved local topology in [PR #37](https://github.com/utkarshmankad/iot-streaming-platform/pull/37). Supply a repeatable local deployment for Java gateway and Mosquitto on one ARM64 Linux device, with the spool and registry cache on its SD card and backend, TimescaleDB and dashboard on the laptop. Validate Compose and images in CI. With hardware available, verify the SD mount preflight, LAN isolation, restart persistence and replay after the laptop link drops. *(REQ-05, OPS-04)*
 
 - [ ] **FU-04 · Reconcile surviving physical devices before restoring control.** Origin [PR #45](https://github.com/utkarshmankad/iot-streaming-platform/pull/45). After FU-03, verify the reported sampling state and applied-version floor of surviving site devices before reopening control after a backend restore. Exercise late and stale commands on the physical ARM64 setup. *(REQ-06, CTL-01–02, OPS-06)*
+
+- [ ] **FU-05 · Exercise database ingestion paths under PIT.** Origin [PR #47](https://github.com/utkarshmankad/iot-streaming-platform/pull/47). After FU-01 and M3.5, use focused database fixtures to exercise the backend mutation gaps in tenant-scoped admission, deduplication and conflict persistence. Compare executed mutations and publish the report without changing the required PR checks. *(CI-03, ING-01–03)*
 
 ## Change history
 
@@ -120,3 +122,4 @@ Record changes to milestone sequence, tasks or exit gates here in the same pull 
 | M3.2 control UI and liveness | [PR #40](https://github.com/utkarshmankad/iot-streaming-platform/pull/40) | Completed after merge. Verified distinct live, stale, paused and offline states, idempotent control retries, terminal offline expiry and the five-second command p95 target. Recorded the remaining physical local deployment verification and profiles in FU-03. |
 | M3.3 observability and alarms | [PR #42](https://github.com/utkarshmankad/iot-streaming-platform/pull/42) | Completed after merge. Verified queue warning and critical thresholds, database and backup alarms, private operator access, and persistent firing, resolution, deduplication and watchdog gaps. The recurring backup signal producer remains part of M3.4. |
 | M3.4 backup and restore tooling | [PR #45](https://github.com/utkarshmankad/iot-streaming-platform/pull/45) | Completed after merge. Verified timestamp recovery, fresh volumes, held and reconciled controls, tenant isolation, original-ID replay, and checksum and archive-gap rejection. Recorded physical device recovery reconciliation in FU-04. |
+| FU-01 nightly mutation testing | [PR #47](https://github.com/utkarshmankad/iot-streaming-platform/pull/47) | Completed after merge. Added targeted PIT runs for four modules. Verified the Nightly jobs and reports by manual dispatch. Scheduled-run confirmation remains in M3.5. Added FU-05 for the backend database paths the first mutation run did not exercise. |

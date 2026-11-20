@@ -18,7 +18,7 @@ import org.springframework.stereotype.Component;
 @Component
 @Profile("registry")
 @EnableScheduling
-class GatewayRegistries {
+public class GatewayRegistries {
   private static final Logger LOG = LoggerFactory.getLogger(GatewayRegistries.class);
   private final List<RegistryCache> caches;
 
@@ -45,6 +45,10 @@ class GatewayRegistries {
                 UUID.fromString("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
                 gateway,
                 directory.resolve("demo-b.pb")));
+  }
+
+  public List<RegistryCache> scopes() {
+    return caches;
   }
 
   @Scheduled(fixedDelayString = "${IOT_REGISTRY_REFRESH_INTERVAL:PT30S}")

@@ -116,7 +116,7 @@ configure(services) {
         add("testImplementation", "org.junit.jupiter:junit-jupiter")
         add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher")
         add("spotbugsPlugins", "com.h3xstream.findsecbugs:findsecbugs-plugin:1.14.0")
-        if (name == "simulator") {
+        if (name == "simulator" || name == "gateway") {
             add("implementation", "org.xerial:sqlite-jdbc:3.54.1.0")
             add("implementation", "org.eclipse.paho:org.eclipse.paho.mqttv5.client:1.2.5")
             add("integrationTestImplementation", "org.testcontainers:testcontainers")

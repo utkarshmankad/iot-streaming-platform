@@ -57,12 +57,20 @@ public final class RegistryCache {
     return Optional.ofNullable(current).map(Entry::snapshot);
   }
 
+  public UUID tenant() {
+    return tenant;
+  }
+
+  public void authorize(HttpRequest.Builder request) {
+    request.header("Authorization", "Bearer " + token);
+  }
+
   public synchronized void refresh() throws IOException, InterruptedException {
     var request =
         HttpRequest.newBuilder(endpoint)
             .timeout(Duration.ofSeconds(5))
-            .header("Authorization", "Bearer " + token)
             .header("Accept", "application/x-protobuf");
+    authorize(request);
     if (current != null) {
       request.header("If-None-Match", current.etag());
     }

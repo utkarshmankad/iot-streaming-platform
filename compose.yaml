@@ -71,6 +71,9 @@ services:
       <<: *java-environment
       SPRING_PROFILES_ACTIVE: registry
       IOT_REGISTRY_URL: http://backend:8080/internal/v1/registry
+      IOT_GATEWAY_MQTT_A_PASSWORD: ${IOT_STACK_GATEWAY_A_MQTT_PASSWORD:-}
+      IOT_GATEWAY_MQTT_B_PASSWORD: ${IOT_STACK_GATEWAY_B_MQTT_PASSWORD:-}
+      IOT_GATEWAY_MAX_BYTES_PER_TENANT: ${IOT_STACK_GATEWAY_MAX_BYTES_PER_TENANT:-5000000000}
       IOT_REGISTRY_GATEWAY_A_TOKEN: ${IOT_STACK_GATEWAY_A_TOKEN:-}
       IOT_REGISTRY_GATEWAY_B_TOKEN: ${IOT_STACK_GATEWAY_B_TOKEN:-}
     networks: [sensors, gateway-api]
@@ -78,8 +81,6 @@ services:
       - gateway-spool:/var/lib/iot
     depends_on:
       mosquitto:
-        condition: service_healthy
-      backend:
         condition: service_healthy
 
   simulator:

@@ -4,7 +4,7 @@ set -euo pipefail
 cache_dir="${RUNNER_TEMP:?}/trivy-cache"
 mkdir -p "$cache_dir"
 
-for service in backend gateway simulator frontend; do
+for service in backend gateway simulator frontend alarm-receiver; do
   printf 'Scanning %s\n' "$service"
   docker save "iot-platform-${service}:test" |
     docker run --rm -i --entrypoint /bin/sh -v "$cache_dir:/root/.cache/trivy" \

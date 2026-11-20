@@ -61,14 +61,30 @@ final class GatewayIngestion {
             meters.counter("iot.gateway.mqtt.inbox.overflow.events", "tenant", tenant.toString());
         var mqtt =
             new GatewayMqtt(
-                mqttEndpoint, tenant, names.get(index), credentials.get(index), overflow);
+                mqttEndpoint,
+                tenant,
+                names.get(index),
+                credentials.get(index),
+                overflow,
+                meters.counter("iot.gateway.mqtt.reconnects", "tenant", tenant.toString()));
+        Gauge.builder("iot.gateway.registry.age.seconds", registry, value -> value.ageSeconds())
+            .tag("tenant", tenant.toString())
+            .register(meters);
+        Gauge.builder("iot.gateway.mqtt.connected", mqtt, value -> value.connected() ? 1 : 0)
+            .tag("tenant", tenant.toString())
+            .register(meters);
         channels.add(
             new Channel(
                 tenant,
                 mqtt,
                 new GatewayIngress(
                     spool, registry, mqtt, environment.matchesProfiles("fault-test")),
-                new GatewayDelivery(spool, registry, http, upload),
+                new GatewayDelivery(
+                    spool,
+                    registry,
+                    http,
+                    upload,
+                    meters.counter("iot.gateway.delivery.retries", "tenant", tenant.toString())),
                 new GatewayCommands(
                     spool, registry, mqtt, http, registryEndpoint.resolve(CommandProtocol.PATH)),
                 new GatewayHeartbeats(

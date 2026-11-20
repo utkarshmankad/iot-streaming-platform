@@ -12,6 +12,7 @@ x-logging: &logging
     max-file: "5"
 
 x-java-environment: &java-environment
+  LOGGING_STRUCTURED_FORMAT_CONSOLE: ecs
   MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
   MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,prometheus
 
@@ -211,6 +212,23 @@ services:
       <<: *healthcheck
       test: [CMD-SHELL, 'mosquitto_sub -h 127.0.0.1 -u scaffold_health -P "$$MQTT_HEALTH_PASSWORD" -t iot/scaffold/health -E -W 3']
 
+  broker-metrics:
+    init: true
+    profiles: [local, test]
+    logging: *logging
+    image: eclipse-mosquitto:2.0.22
+    user: "1883:1883"
+    entrypoint: [/bin/sh, /run/broker-metrics.sh]
+    environment:
+      MQTT_HEALTH_PASSWORD: ${IOT_STACK_MQTT_HEALTH_PASSWORD:?Run ./scripts/stack.sh local up or test up}
+    networks: [sensors]
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+    volumes:
+      - ./observability/broker-metrics.sh:/run/broker-metrics.sh:ro
+      - broker-metrics-data:/mosquitto/data
+
   prometheus:
     profiles: [local, test]
     logging: *logging
@@ -219,9 +237,11 @@ services:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
       - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=${IOT_STACK_METRICS_RETENTION_SIZE:-8GB}
     networks: [monitoring, gateway-api, sensors]
     volumes:
       - ./observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
       - metrics-data:/prometheus
     healthcheck:
       <<: *healthcheck
@@ -231,10 +251,15 @@ services:
     profiles: [local, test]
     logging: *logging
     image: prom/alertmanager:v0.35.0
+    environment:
+      IOT_ALARM_WEBHOOK_TOKEN: ${IOT_STACK_ALARM_WEBHOOK_TOKEN:-}
+    entrypoint: [/bin/sh, -ec]
     command:
-      - --config.file=/etc/alertmanager/alertmanager.yml
-      - --storage.path=/alertmanager
-      - --cluster.listen-address=
+      - |
+        umask 077
+        : "$${IOT_ALARM_WEBHOOK_TOKEN:?Run scripts/stack.sh to initialize the alarm credential}"
+        printf '%s' "$$IOT_ALARM_WEBHOOK_TOKEN" >/tmp/iot-alarm-webhook
+        exec /bin/alertmanager --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/alertmanager --cluster.listen-address=
     networks: [monitoring]
     volumes:
       - ./observability/alertmanager.yaml:/etc/alertmanager/alertmanager.yml:ro
@@ -244,16 +269,23 @@ services:
       test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:9093/-/ready]
 
   alarm-receiver:
+    init: true
     profiles: [local, test]
     logging: *logging
-    image: nginx:1.30.7-alpine3.24
+    image: iot-platform-alarm-receiver:${IOT_STACK_IMAGE_TAG:-local}
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: observability/Dockerfile
+    environment:
+      IOT_ALARM_WEBHOOK_TOKEN: ${IOT_STACK_ALARM_WEBHOOK_TOKEN:-}
     networks: [monitoring]
     volumes:
-      - ./config/nginx/alarm-receiver.conf:/etc/nginx/conf.d/default.conf:ro
       - alarm-data:/var/lib/iot/alarms
+      - broker-metrics-data:/run/iot-broker:ro
     healthcheck:
       <<: *healthcheck
-      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+      test: [CMD, python, -c, "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/healthz', timeout=3).close()"]
 
 networks:
   ingress:
@@ -280,3 +312,4 @@ volumes:
   metrics-data: {}
   alertmanager-data: {}
   alarm-data: {}
+  broker-metrics-data: {}

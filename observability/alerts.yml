@@ -1,0 +1,302 @@
+groups:
+  - name: platform
+    rules:
+      - record: iot:queue_utilization
+        expr: |
+          (iot_gateway_spool_bytes / iot_gateway_spool_capacity_bytes)
+          or (iot_simulator_pending_bytes / iot_simulator_pending_capacity_bytes)
+      - alert: Watchdog
+        expr: |
+          vector(1)
+        labels:
+          severity: info
+          stage: monitoring
+        annotations:
+          summary: "Continuous alarm path probe"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: TargetUnavailable
+        expr: |
+          up == 0
+        for: 1m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: monitoring
+          condition: target
+        annotations:
+          summary: "Metrics target is unavailable or its state is unknown"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: TargetUnavailableCritical
+        expr: |
+          up{job="java-services",instance=~"backend:8080|gateway:8080"} == 0
+        for: 5m
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: monitoring
+          condition: target
+        annotations:
+          summary: "Ingestion service is unavailable"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: MonitoringTargetsMissing
+        expr: |
+          absent(up{job="java-services"}) or absent(up{job="alarm-receiver"}) or absent(up{job="alertmanager"})
+        for: 1m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: monitoring
+        annotations:
+          summary: "Expected monitoring target is missing"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: AlarmDeliveryStale
+        expr: |
+          iot_alarm_monitoring_gap > 0
+        for: 30s
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: monitoring
+        annotations:
+          summary: "Watchdog deliveries are missing"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: DatabaseUnavailable
+        expr: |
+          iot_database_available == 0
+        for: 1m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: database
+          condition: database
+        annotations:
+          summary: "Database health query did not complete"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: DatabaseUnavailableCritical
+        expr: |
+          iot_database_available == 0
+        for: 5m
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: database
+          condition: database
+        annotations:
+          summary: "Database has been unavailable for five minutes"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: EnabledSensorsNotReporting
+        expr: |
+          iot_sensor_stale > 0 or iot_sensor_offline > 0
+        for: 1m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: sensors
+        annotations:
+          summary: "Enabled sensors have stale readings or heartbeats"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: DeliveryStalled
+        expr: |
+          iot_gateway_spool_oldest_seconds > 300 or (iot_simulator_receipt_age_seconds > 300 and iot_simulator_pending_events > 0)
+        for: 30s
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: delivery
+        annotations:
+          summary: "Oldest undelivered reading exceeds five minutes"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: QueueCapacity
+        expr: |
+          iot:queue_utilization > 0.70 or (iot:queue_utilization > 0.65 and on (tenant,instance) ALERTS{alertname="QueueCapacity",alertstate="firing"})
+        for: 5m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: delivery
+          condition: queue
+        annotations:
+          summary: "Queue is above 70 percent of its configured budget"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: QueueCapacityCritical
+        expr: |
+          iot:queue_utilization > 0.90 or (iot:queue_utilization > 0.85 and on (tenant,instance) ALERTS{alertname="QueueCapacityCritical",alertstate="firing"})
+        for: 2m
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: delivery
+          condition: queue
+        annotations:
+          summary: "Queue is above 90 percent of its configured budget"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: QueueFull
+        expr: |
+          iot:queue_utilization >= 1 or increase(iot_gateway_backpressure_events_total[1m]) > 0
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: delivery
+          condition: queue
+        annotations:
+          summary: "Queue is full or is rejecting admissions temporarily"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: SensorDataDropped
+        expr: |
+          increase(iot_simulator_dropped_events_total[1m]) > 0
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: sensors
+        annotations:
+          summary: "Simulator dropped generated samples"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: IngestReduced
+        expr: |
+          sum(rate(iot_ingest_gateway_to_commit_seconds_count[2m])) < 0.80 * sum(rate(iot_simulator_generated_events_total[2m]))
+          and sum(rate(iot_simulator_generated_events_total[2m])) > 1
+        for: 5m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: ingest
+        annotations:
+          summary: "Commit rate is below 80 percent of generation"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: IngestStalled
+        expr: |
+          sum(increase(iot_ingest_gateway_to_commit_seconds_count[2m])) == 0
+          and sum(increase(iot_simulator_generated_events_total[2m])) > 0
+        for: 5m
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: ingest
+        annotations:
+          summary: "Enabled producers generated readings while commits stopped"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: IngestLatency
+        expr: |
+          sum(rate(iot_ingest_gateway_to_commit_seconds_bucket{le="3.0"}[5m])) < 0.95 * sum(rate(iot_ingest_gateway_to_commit_seconds_count[5m]))
+          and sum(increase(iot_ingest_gateway_to_commit_seconds_count[5m])) >= 20
+        for: 5m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: ingest
+        annotations:
+          summary: "More than five percent of commits exceed 3 seconds"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: TrendLatency
+        expr: |
+          sum(rate(http_server_requests_seconds_bucket{uri="/api/v1/trends",le="0.5"}[5m])) < 0.95 * sum(rate(http_server_requests_seconds_count{uri="/api/v1/trends"}[5m]))
+          and sum(increase(http_server_requests_seconds_count{uri="/api/v1/trends"}[5m])) >= 20
+        for: 5m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: trends
+        annotations:
+          summary: "More than five percent of trend queries exceed 500 ms"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: AggregateRefreshDelayed
+        expr: |
+          ((time() - iot_aggregate_last_refresh_seconds > 300 and iot_aggregate_last_refresh_seconds > 0)
+          or (iot_aggregate_last_refresh_seconds == 0 and process_uptime_seconds > 300))
+          and iot_sensor_enabled > 0
+        for: 30s
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: trends
+        annotations:
+          summary: "Aggregate refresh is over five minutes behind"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: CommandAcknowledgmentSlow
+        expr: |
+          sum(rate(iot_command_ack_seconds_bucket{le="5.0"}[5m])) < 0.95 * sum(rate(iot_command_ack_seconds_count[5m]))
+          and sum(increase(iot_command_ack_seconds_count[5m])) >= 10
+        for: 1m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: control
+        annotations:
+          summary: "More than five percent of online command acknowledgments exceed five seconds"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: StorageHeadroom
+        expr: |
+          iot_alarm_storage_available_bytes < 10e9
+        for: 1m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: storage
+          condition: disk
+        annotations:
+          summary: "Local Docker storage has less than 10 GB free"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: StorageHeadroomCritical
+        expr: |
+          iot_alarm_storage_available_bytes < 5e9
+        for: 30s
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: storage
+          condition: disk
+        annotations:
+          summary: "Local Docker storage has less than 5 GB free"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: WalArchivingFailures
+        expr: |
+          increase(iot_wal_archive_failures[15m]) > 0 and iot_wal_archive_enabled == 1
+        for: 15m
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: backup
+        annotations:
+          summary: "WAL archiving has continued to report failures"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: BackupOverdue
+        expr: |
+          time() - iot_backup_verified_timestamp_seconds > 93600 and iot_backup_monitoring_enabled == 1
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: backup
+        annotations:
+          summary: "The last verified backup is over 26 hours old"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: BackupChecksumFailed
+        expr: |
+          iot_backup_checksum_failed == 1 and iot_backup_monitoring_enabled == 1
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: backup
+        annotations:
+          summary: "The latest backup checksum failed"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: BackupMetricsMissing
+        expr: |
+          iot_backup_monitoring_enabled == 1 unless iot_backup_verified_timestamp_seconds
+        for: 1m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: backup
+        annotations:
+          summary: "The backup status publisher has not reported a usable timestamp"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: BrokerMetricsMissing
+        expr: iot_broker_metrics_available == 0
+        for: 1m
+        keep_firing_for: 30s
+        labels:
+          severity: warning
+          stage: broker
+        annotations:
+          summary: "The broker metrics collector is unavailable"
+          runbook: "docs/local-deployment.md#alarms-and-metrics"

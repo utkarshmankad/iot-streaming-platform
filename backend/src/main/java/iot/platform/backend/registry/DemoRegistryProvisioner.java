@@ -109,7 +109,8 @@ final class DemoRegistryProvisioner implements ApplicationRunner {
   private Projection projectAssignments() {
     var assignments = new StringBuilder();
     var principals = new TreeMap<String, List<String>>();
-    principals.put("scaffold_health", List.of("topic read iot/scaffold/health"));
+    principals.put(
+        "scaffold_health", List.of("topic read iot/scaffold/health", "topic read $SYS/broker/#"));
     jdbc.query(
         """
         SELECT g.tenant_id, g.credential_ref, d.device_id, d.mqtt_principal_ref,

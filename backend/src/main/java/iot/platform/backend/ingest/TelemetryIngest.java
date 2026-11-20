@@ -43,10 +43,12 @@ class TelemetryIngest {
   private final GatewayAccess access;
   private final TelemetryStore store;
   private final Timer receiptToCommit;
+  private final MeterRegistry metrics;
 
   TelemetryIngest(GatewayAccess access, TelemetryStore store, MeterRegistry metrics) {
     this.access = access;
     this.store = store;
+    this.metrics = metrics;
     receiptToCommit =
         Timer.builder("iot.ingest.gateway.to.commit")
             .description("Gateway receipt to database commit for newly committed readings")
@@ -92,7 +94,24 @@ class TelemetryIngest {
     if (!valid.isEmpty()) {
       persist(assignment.tenant(), valid, receivedMs);
     }
-    return response.build();
+    var reply = response.build();
+    TransactionSynchronizationManager.registerSynchronization(
+        new TransactionSynchronization() {
+          @Override
+          public void afterCommit() {
+            for (var result : reply.getResultsList()) {
+              metrics
+                  .counter(
+                      "iot.ingest.events",
+                      "tenant",
+                      assignment.tenant().toString(),
+                      "outcome",
+                      result.getOutcome().name().toLowerCase(java.util.Locale.ROOT))
+                  .increment();
+            }
+          }
+        });
+    return reply;
   }
 
   private static TelemetryStore.Reading validate(
@@ -157,6 +176,10 @@ class TelemetryIngest {
             @Override
             public void afterCommit() {
               long committedAt = System.currentTimeMillis();
+              metrics
+                  .counter("iot.ingest.committed.bytes", "tenant", tenant.toString())
+                  .increment(
+                      inserted.stream().mapToLong(TelemetryStore.Reading::payloadBytes).sum());
               for (var reading : inserted) {
                 receiptToCommit.record(
                     Math.max(0, committedAt - reading.gatewayReceivedMs()), TimeUnit.MILLISECONDS);

@@ -1,0 +1,86 @@
+rule_files: [alerts.yml]
+evaluation_interval: 15s
+
+tests:
+  - name: queue warnings, critical escalation, and recovery
+    interval: 15s
+    input_series:
+      - series: 'iot_gateway_spool_bytes{tenant="tenant-a",instance="gateway:8080"}'
+        values: '75+0x22 95+0x10 60+0x12'
+      - series: 'iot_gateway_spool_capacity_bytes{tenant="tenant-a",instance="gateway:8080"}'
+        values: '100+0x47'
+    alert_rule_test:
+      - eval_time: 4m45s
+        alertname: QueueCapacity
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: QueueCapacity
+        exp_alerts:
+          - exp_labels: {tenant: tenant-a, instance: 'gateway:8080', severity: warning, stage: delivery, condition: queue}
+            exp_annotations: {summary: 'Queue is above 70 percent of its configured budget', runbook: 'docs/local-deployment.md#alarms-and-metrics'}
+      - eval_time: 8m
+        alertname: QueueCapacityCritical
+        exp_alerts:
+          - exp_labels: {tenant: tenant-a, instance: 'gateway:8080', severity: critical, stage: delivery, condition: queue}
+            exp_annotations: {summary: 'Queue is above 90 percent of its configured budget', runbook: 'docs/local-deployment.md#alarms-and-metrics'}
+      - eval_time: 9m45s
+        alertname: QueueCapacity
+        exp_alerts: []
+      - eval_time: 9m45s
+        alertname: QueueCapacityCritical
+        exp_alerts: []
+  - name: a missing target and missing backup data are unknown
+    interval: 15s
+    input_series:
+      - series: 'up{job="alertmanager",instance="alertmanager:9093"}'
+        values: '1+0x24'
+      - series: 'up{job="alarm-receiver",instance="alarm-receiver:8080"}'
+        values: '1+0x24'
+      - series: 'iot_backup_monitoring_enabled'
+        values: '1+0x24'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: MonitoringTargetsMissing
+        exp_alerts:
+          - exp_labels: {job: java-services, severity: warning, stage: monitoring}
+            exp_annotations: {summary: 'Expected monitoring target is missing', runbook: 'docs/local-deployment.md#alarms-and-metrics'}
+      - eval_time: 1m
+        alertname: BackupMetricsMissing
+        exp_alerts:
+          - exp_labels: {severity: warning, stage: backup}
+            exp_annotations: {summary: 'The backup status publisher has not reported a usable timestamp', runbook: 'docs/local-deployment.md#alarms-and-metrics'}
+      - eval_time: 1m
+        alertname: BackupOverdue
+        exp_alerts: []
+  - name: a full queue pages without waiting for sustained capacity pressure
+    interval: 15s
+    input_series:
+      - series: 'iot_simulator_pending_bytes{tenant="tenant-a",instance="simulator:8080"}'
+        values: '100 60+0x5'
+      - series: 'iot_simulator_pending_capacity_bytes{tenant="tenant-a",instance="simulator:8080"}'
+        values: '100+0x6'
+    alert_rule_test:
+      - eval_time: 0s
+        alertname: QueueFull
+        exp_alerts:
+          - exp_labels: {tenant: tenant-a, instance: 'simulator:8080', severity: critical, stage: delivery, condition: queue}
+            exp_annotations: {summary: 'Queue is full or is rejecting admissions temporarily', runbook: 'docs/local-deployment.md#alarms-and-metrics'}
+      - eval_time: 45s
+        alertname: QueueFull
+        exp_alerts: []
+  - name: an overdue verified backup is critical
+    interval: 1h
+    input_series:
+      - series: 'iot_backup_monitoring_enabled'
+        values: '1+0x28'
+      - series: 'iot_backup_verified_timestamp_seconds'
+        values: '5+0x28'
+    alert_rule_test:
+      - eval_time: 26h
+        alertname: BackupOverdue
+        exp_alerts: []
+      - eval_time: 27h
+        alertname: BackupOverdue
+        exp_alerts:
+          - exp_labels: {severity: critical, stage: backup}
+            exp_annotations: {summary: 'The last verified backup is over 26 hours old', runbook: 'docs/local-deployment.md#alarms-and-metrics'}

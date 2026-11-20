@@ -25,17 +25,26 @@ final class GatewayMqtt implements AutoCloseable {
   private final ArrayBlockingQueue<Incoming> heartbeats = new ArrayBlockingQueue<>(512);
   private final String[] filters;
   private final Counter overflow;
+  private final Counter reconnects;
+  private boolean previouslyConnected;
   private IMqttToken connection;
   private IMqttToken subscription;
   private long retryAt;
   private int failures;
 
-  GatewayMqtt(String uri, UUID tenant, String principal, String password, Counter overflow)
+  GatewayMqtt(
+      String uri,
+      UUID tenant,
+      String principal,
+      String password,
+      Counter overflow,
+      Counter reconnects)
       throws MqttException {
     if (password.isBlank()) {
       throw new IllegalArgumentException("A generated MQTT password is required for the gateway");
     }
     this.overflow = overflow;
+    this.reconnects = reconnects;
     String prefix = "iot/v1/" + tenant + "/+/+/";
     filters = new String[] {prefix + "telemetry", prefix + "command-ack", prefix + "heartbeat"};
     options.setUserName(principal);
@@ -82,6 +91,10 @@ final class GatewayMqtt implements AutoCloseable {
   private void retryLater(long now) {
     long delay = Math.min(30_000L, 500L << Math.min(failures++, 6));
     retryAt = now + delay + Math.floorMod(client.getClientId().hashCode() ^ failures, 250);
+  }
+
+  boolean connected() {
+    return client.isConnected();
   }
 
   Incoming poll() {
@@ -159,7 +172,10 @@ final class GatewayMqtt implements AutoCloseable {
     public void deliveryComplete(IMqttToken token) {}
 
     @Override
-    public void connectComplete(boolean reconnected, String uri) {}
+    public void connectComplete(boolean reconnected, String uri) {
+      if (previouslyConnected) reconnects.increment();
+      previouslyConnected = true;
+    }
 
     @Override
     public void authPacketArrived(int reasonCode, MqttProperties properties) {}

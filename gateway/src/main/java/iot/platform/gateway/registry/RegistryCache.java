@@ -34,6 +34,7 @@ public final class RegistryCache {
   private final UUID gateway;
   private final Path file;
   private volatile Entry current;
+  private volatile long lastContactMs;
 
   public RegistryCache(
       HttpClient http, URI endpoint, String token, UUID tenant, UUID gateway, Path file) {
@@ -46,11 +47,20 @@ public final class RegistryCache {
     if (Files.isRegularFile(this.file)) {
       try (InputStream stream = Files.newInputStream(this.file)) {
         var cached = CachedRegistry.parseFrom(readBounded(stream, MAX_BYTES + 100));
+        long saved = Files.getLastModifiedTime(this.file).toMillis();
         current = validate(cached.getEtag(), cached.getBody());
+        lastContactMs = saved;
       } catch (IOException invalid) {
         LOG.warn("Ignoring unverified registry cache for tenant {}", tenant);
       }
     }
+  }
+
+  public double ageSeconds() {
+    long last = lastContactMs;
+    return last == 0 || current == null
+        ? Double.NaN
+        : Math.max(0, System.currentTimeMillis() - last) / 1000.0;
   }
 
   public Optional<RegistrySnapshot> current() {
@@ -101,6 +111,7 @@ public final class RegistryCache {
         default ->
             throw new IOException("Registry request failed with status " + response.statusCode());
       }
+      lastContactMs = System.currentTimeMillis();
     }
   }
 

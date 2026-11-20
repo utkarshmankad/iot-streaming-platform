@@ -45,6 +45,7 @@ final class Simulation {
   private final long maximumBytes;
   private final long seed;
   private final Path faultSilence;
+  private final Path faultCommandAck;
   private long previousTick;
   private long nextMetrics;
 
@@ -64,8 +65,10 @@ final class Simulation {
     streams = SensorStream.read(assignments);
     var passwords = Map.of("device-a", deviceA, "device-b", deviceB);
     boolean faultTest = environment.matchesProfiles("fault-test");
-    faultSilence = faultTest ? database.resolveSibling("fault-silence") : null;
-    outbox = SimulatorOutbox.open(database, maximumBytes, faultTest);
+    boolean pilot = environment.matchesProfiles("pilot-fault");
+    faultSilence = faultTest || pilot ? database.resolveSibling("fault-silence") : null;
+    faultCommandAck = faultTest ? database.resolveSibling("fault-command-ack") : null;
+    outbox = SimulatorOutbox.open(database, maximumBytes, faultTest || pilot);
     try {
       for (var entry :
           streams.stream().collect(Collectors.groupingBy(SensorStream::device)).entrySet()) {
@@ -88,8 +91,9 @@ final class Simulation {
   @Scheduled(fixedDelay = 50)
   synchronized void tick() throws SQLException {
     long now = clock.millis();
+    boolean withholdCommandAck = faultCommandAck != null && Files.exists(faultCommandAck);
     for (var session : sessions.values()) {
-      session.flush(outbox, now);
+      session.flush(outbox, now, withholdCommandAck);
     }
     if (faultSilence == null || !Files.exists(faultSilence)) {
       var events = new ArrayList<SimulatorOutbox.Intent>();

@@ -1,0 +1,7 @@
+services:
+  simulator:
+    environment:
+      SPRING_PROFILES_ACTIVE: simulate,pilot-fault
+  registry-provision:
+    environment:
+      IOT_REGISTRY_STREAMS_PER_TYPE: ${IOT_STACK_SIM_STREAMS_PER_TYPE:-11}

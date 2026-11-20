@@ -1,0 +1,399 @@
+openapi: 3.1.0
+info:
+  title: Environmental IoT Browser API
+  version: 1.0.0
+  description: Same-origin endpoints. All browser responses use Cache-Control no-store.
+servers:
+  - url: /api/v1
+security:
+  - sessionCookie: []
+paths:
+  /session/csrf:
+    get:
+      operationId: readCsrfToken
+      summary: Get a CSRF token for the current or a new guest session
+      security: []
+      responses:
+        '200':
+          description: Echo the returned token in the named header on mutations.
+          headers:
+            Set-Cookie:
+              description: Issued when a guest session is created.
+              schema: {type: string}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CsrfToken'}
+  /session:
+    post:
+      operationId: openSession
+      summary: Sign in and rotate the session and CSRF token
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Csrf'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SignIn'}
+      responses:
+        '200': {$ref: '#/components/responses/RotatedSession'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    get:
+      operationId: readSession
+      summary: Read the active tenant and available memberships
+      responses:
+        '200':
+          description: Current browser session.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Session'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+    delete:
+      operationId: closeSession
+      summary: End the session and clear its cookie
+      parameters:
+        - $ref: '#/components/parameters/Csrf'
+      responses:
+        '204':
+          description: Signed out.
+          headers:
+            Set-Cookie:
+              description: Expires the session cookie.
+              schema: {type: string}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+  /session/tenant:
+    put:
+      operationId: switchSessionTenant
+      summary: Change the active tenant to an authorized membership and rotate the session
+      parameters:
+        - $ref: '#/components/parameters/Csrf'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenantId]
+              properties:
+                tenantId: {$ref: '#/components/schemas/Id'}
+      responses:
+        '200': {$ref: '#/components/responses/RotatedSession'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /sensors:
+    get:
+      operationId: listSensors
+      summary: List registered sensors and their state within the active tenant
+      parameters:
+        - name: cursor
+          in: query
+          description: Opaque continuation issued to this session and tenant.
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+      responses:
+        '200':
+          description: A stable page in sensor ID order.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SensorPage'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /trends:
+    get:
+      operationId: readTrends
+      summary: Read aggregated buckets for up to ten sensors within the active tenant
+      description: Bounds are UTC-aligned and half-open. Weeks begin Monday. The history limit is 30 days and to may be the end of the current bucket.
+      parameters:
+        - name: sensorId
+          in: query
+          required: true
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: {$ref: '#/components/schemas/Id'}
+            minItems: 1
+            maxItems: 10
+            uniqueItems: true
+        - name: from
+          in: query
+          required: true
+          schema: {$ref: '#/components/schemas/Timestamp'}
+        - name: to
+          in: query
+          required: true
+          schema: {$ref: '#/components/schemas/Timestamp'}
+        - name: bucket
+          in: query
+          required: true
+          schema: {$ref: '#/components/schemas/Resolution'}
+      responses:
+        '200':
+          description: Series in requested sensor order and buckets in chronological order.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TrendResult'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/Missing'}
+        '429':
+          description: Tenant query limit reached.
+          headers:
+            Retry-After:
+              schema: {type: integer}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Problem'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /sensors/{id}/commands:
+    post:
+      x-implementation-milestone: M3.1
+      operationId: requestSensorCommand
+      summary: Request an enabled state for a sensor
+      description: Requires an operator role. Identical replays by tenant, actor, and sensor return the original accepted response.
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+        - $ref: '#/components/parameters/Csrf'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, minLength: 1}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: {type: boolean}
+      responses:
+        '202':
+          description: Durable command acceptance.
+          headers:
+            Location:
+              description: Relative URL of the command status resource.
+              schema: {type: string, format: uri-reference}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Command'}
+        '400': {$ref: '#/components/responses/Invalid'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/Missing'}
+        '409':
+          description: IDEMPOTENCY_CONFLICT when the key is reused with a different desired state.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Problem'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+  /commands/{id}:
+    get:
+      x-implementation-milestone: M3.1
+      operationId: readSensorCommand
+      summary: Read the acknowledged status of a requested sensor state
+      parameters:
+        - $ref: '#/components/parameters/ResourceId'
+      responses:
+        '200':
+          description: Current status of the command in the active tenant.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandStatus'}
+        '401': {$ref: '#/components/responses/Unauthenticated'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '404': {$ref: '#/components/responses/Missing'}
+        '503': {$ref: '#/components/responses/Unavailable'}
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: IOTSESSION
+  parameters:
+    Csrf:
+      name: X-CSRF-TOKEN
+      in: header
+      required: true
+      description: Obtain the token with GET /session/csrf before a write.
+      schema: {type: string}
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/Id'}
+  responses:
+    RotatedSession:
+      description: A fresh session. Fetch a new CSRF token before the next mutation.
+      headers:
+        Set-Cookie:
+          description: Replaces the previous session cookie.
+          schema: {type: string}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Session'}
+    Invalid:
+      description: Invalid parameters or JSON body.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Unauthenticated:
+      description: Credentials are invalid or the session is missing or expired.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Forbidden:
+      description: Access is unavailable for the selected tenant, or the CSRF token is invalid.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Missing:
+      description: At least one requested resource is unavailable in the active tenant.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Problem'}
+    Unavailable:
+      description: Temporary service unavailability.
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/Problem'}
+  schemas:
+    Id: {type: string, format: uuid}
+    Timestamp: {type: string, format: date-time}
+    NullableTimestamp: {type: [string, 'null'], format: date-time}
+    Resolution: {type: string, enum: [15m, 1h, 1d, 1w]}
+    CsrfToken:
+      type: object
+      required: [headerName, token]
+      properties:
+        headerName: {const: X-CSRF-TOKEN}
+        token: {type: string}
+    SignIn:
+      type: object
+      required: [username, password]
+      properties:
+        username: {type: string, minLength: 1, maxLength: 64}
+        password: {type: string, format: password, writeOnly: true, minLength: 1}
+        tenantId:
+          type: [string, 'null']
+          format: uuid
+          description: Defaults to the first available membership in stable tenant ID order.
+    Session:
+      type: object
+      required: [username, activeTenantId, tenants]
+      properties:
+        username: {type: string}
+        activeTenantId: {$ref: '#/components/schemas/Id'}
+        tenants:
+          type: array
+          items:
+            type: object
+            required: [tenantId, displayName, role]
+            properties:
+              tenantId: {$ref: '#/components/schemas/Id'}
+              displayName: {type: string}
+              role: {type: string, enum: [viewer, operator]}
+    SensorPage:
+      type: object
+      required: [items, nextCursor]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Sensor'}
+        nextCursor: {type: [string, 'null']}
+    Sensor:
+      type: object
+      required: [sensorId, displayName, type, unit, samplingPeriodMs, desiredEnabled, confirmedEnabled, connectivity, sampleStatus, lastObservedAt, lastHeartbeatAt]
+      properties:
+        sensorId: {$ref: '#/components/schemas/Id'}
+        displayName: {type: string}
+        type: {type: string}
+        unit: {type: string}
+        samplingPeriodMs: {type: integer}
+        desiredEnabled: {type: boolean}
+        confirmedEnabled: {type: [boolean, 'null']}
+        connectivity: {type: string, enum: [online, offline, unknown]}
+        sampleStatus: {type: string, enum: [fresh, stale, paused, unknown]}
+        lastObservedAt: {$ref: '#/components/schemas/NullableTimestamp'}
+        lastHeartbeatAt: {$ref: '#/components/schemas/NullableTimestamp'}
+    TrendResult:
+      type: object
+      required: [from, to, bucket, generatedAt, series]
+      properties:
+        from: {$ref: '#/components/schemas/Timestamp'}
+        to: {$ref: '#/components/schemas/Timestamp'}
+        bucket: {$ref: '#/components/schemas/Resolution'}
+        generatedAt: {$ref: '#/components/schemas/Timestamp'}
+        series:
+          type: array
+          items: {$ref: '#/components/schemas/TrendSeries'}
+    TrendSeries:
+      type: object
+      required: [sensorId, type, unit, freshness, buckets]
+      properties:
+        sensorId: {$ref: '#/components/schemas/Id'}
+        type: {type: string}
+        unit: {type: string}
+        freshness:
+          type: object
+          required: [state, lastObservedAt, recentRefreshedAt, materializedThrough]
+          properties:
+            state: {type: string, enum: [unknown, fresh, stale, repair_pending]}
+            lastObservedAt: {$ref: '#/components/schemas/NullableTimestamp'}
+            recentRefreshedAt: {$ref: '#/components/schemas/NullableTimestamp'}
+            materializedThrough: {$ref: '#/components/schemas/NullableTimestamp'}
+        buckets:
+          type: array
+          items: {$ref: '#/components/schemas/TrendBucket'}
+    TrendBucket:
+      type: object
+      required: [start, end, count, min, max, mean, partial]
+      properties:
+        start: {$ref: '#/components/schemas/Timestamp'}
+        end: {$ref: '#/components/schemas/Timestamp'}
+        count: {type: integer, format: int64, minimum: 0}
+        min: {type: [number, 'null'], description: Null when count is zero.}
+        max: {type: [number, 'null'], description: Null when count is zero.}
+        mean: {type: [number, 'null'], description: Null when count is zero.}
+        partial: {type: boolean}
+    Command:
+      type: object
+      required: [commandId, sensorId, version, requestedEnabled, status, createdAt, expiresAt]
+      properties:
+        commandId: {$ref: '#/components/schemas/Id'}
+        sensorId: {$ref: '#/components/schemas/Id'}
+        version: {type: integer, format: int64, minimum: 1}
+        requestedEnabled: {type: boolean}
+        status: {type: string, enum: [pending, applied, failed, expired, superseded]}
+        createdAt: {$ref: '#/components/schemas/Timestamp'}
+        expiresAt: {$ref: '#/components/schemas/Timestamp'}
+    CommandStatus:
+      allOf:
+        - $ref: '#/components/schemas/Command'
+        - type: object
+          required: [confirmedEnabled, resolvedAt]
+          properties:
+            confirmedEnabled: {type: [boolean, 'null']}
+            resolvedAt: {$ref: '#/components/schemas/NullableTimestamp'}
+            reasonCode: {type: string}
+    Problem:
+      type: object
+      required: [code, message, requestId]
+      properties:
+        code: {type: string}
+        message: {type: string}
+        requestId: {$ref: '#/components/schemas/Id'}
+        details: {type: object}

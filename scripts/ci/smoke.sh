@@ -84,3 +84,35 @@ for attempt in {1..20}; do
   fi
   sleep 1
 done
+
+cookies="$(mktemp)"
+trap 'rm -f "$cookies"' EXIT
+csrf="$(curl --fail --silent --show-error --cookie-jar "$cookies" "$url/api/v1/session/csrf")"
+csrf_header="$(jq -er .headerName <<< "$csrf")"
+csrf_token="$(jq -er .token <<< "$csrf")"
+operator_password="$(sed -n 's/^IOT_STACK_OPERATOR_A_PASSWORD=//p' .env.test)"
+test -n "$operator_password"
+printf '%s' "$operator_password" | jq -Rs '{username: "operator-a", password: .}' |
+  curl --fail --silent --show-error --cookie "$cookies" --cookie-jar "$cookies" \
+    --header "$csrf_header: $csrf_token" --header 'Content-Type: application/json' \
+    --data-binary @- "$url/api/v1/session" |
+  jq -e '.activeTenantId == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"' >/dev/null
+sensor_id="$(curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/sensors?limit=1" |
+  jq -er 'select(.items | length == 1) | .items[0] | select(.lastObservedAt != null).sensorId')"
+bounds="$(python3 - <<'PY'
+from datetime import UTC, datetime, timedelta
+
+now = datetime.now(UTC)
+start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0)
+for stamp in (start - timedelta(minutes=15), start + timedelta(minutes=15)):
+    print(stamp.isoformat().replace("+00:00", "Z"), end=" ")
+PY
+)"
+read -r from to <<< "$bounds"
+curl --fail --silent --show-error --cookie "$cookies" --get \
+  --data-urlencode "sensorId=$sensor_id" --data-urlencode "from=$from" \
+  --data-urlencode "to=$to" --data-urlencode 'bucket=15m' "$url/api/v1/trends" |
+  jq -e --arg sensor_id "$sensor_id" \
+    '.bucket == "15m" and (.series | length == 1)
+    and (.series[0] | .sensorId == $sensor_id and (.buckets | length == 2))' >/dev/null
+printf '%s\n' 'Browser can authenticate and query tenant-scoped trends through Nginx.'

@@ -99,6 +99,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm install --global npm@11.19.1
       - run: ./gradlew spotlessCheck --no-daemon
+      - run: npm exec --yes --package=@redocly/cli@2.82.0 -- redocly lint --extends=spec contracts/openapi/browser-v1.yaml
       - run: npm --prefix frontend ci
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run build

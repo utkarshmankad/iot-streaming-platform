@@ -9,6 +9,31 @@ permissions:
   contents: read
 
 jobs:
+  mutation-tests:
+    name: Mutation tests (PIT)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "25.0.5+8"
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - name: Run targeted PIT checks
+        run: ./gradlew mutationChecks --no-daemon
+      - name: Verify mutation reports
+        run: python3 scripts/ci/mutation-reports.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: mutation-report
+          path: "**/build/reports/pitest/"
+          if-no-files-found: error
+          retention-days: 30
+
   images:
     name: Rebuild and rescan application images
     runs-on: ubuntu-latest

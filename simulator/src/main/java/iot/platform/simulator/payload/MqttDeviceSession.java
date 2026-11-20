@@ -49,8 +49,9 @@ final class MqttDeviceSession implements AutoCloseable {
                     stream -> stream.topic("receipt"), Function.identity()));
     options.setUserName(device.principal());
     options.setPassword(password.getBytes(StandardCharsets.UTF_8));
-    options.setCleanStart(false);
-    options.setSessionExpiryInterval(604_800L);
+    // SQLite retries every undelivered application event on a fresh transport session.
+    options.setCleanStart(true);
+    options.setSessionExpiryInterval(0L);
     options.setConnectionTimeout(3);
     options.setKeepAliveInterval(10);
     options.setMaximumPacketSize(8192L);

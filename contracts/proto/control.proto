@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package iot.control.v1;
+option java_package = "iot.platform.control.proto";
+option java_multiple_files = true;
+
+message SamplingCommand {
+  uint32 schema_version = 1;
+  string command_id = 2;
+  string sensor_id = 3;
+  uint64 version = 4;
+  optional bool enabled = 5;
+  int64 expires_at_ms = 6;
+}
+
+message SamplingAcknowledgment {
+  uint32 schema_version = 1;
+  string command_id = 2;
+  string sensor_id = 3;
+  uint64 version = 4;
+  optional bool enabled = 5;
+  int64 applied_at_ms = 6;
+}
+
+message PendingCommand {
+  string device_id = 1;
+  SamplingCommand command = 2;
+}
+
+message PendingCommands {
+  repeated PendingCommand commands = 1;
+}

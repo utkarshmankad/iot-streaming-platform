@@ -3,6 +3,7 @@ package iot.platform.gateway.ingest;
 import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
+import iot.platform.control.CommandProtocol;
 import iot.platform.gateway.registry.GatewayRegistries;
 import iot.platform.telemetry.TelemetryBatchLimits;
 import jakarta.annotation.PreDestroy;
@@ -67,6 +68,8 @@ final class GatewayIngestion {
                 new GatewayIngress(
                     spool, registry, mqtt, environment.matchesProfiles("fault-test")),
                 new GatewayDelivery(spool, registry, http, upload),
+                new GatewayCommands(
+                    spool, registry, mqtt, http, registryEndpoint.resolve(CommandProtocol.PATH)),
                 snapshot));
         registerMetrics(meters, tenant.toString(), snapshot);
       }
@@ -83,6 +86,7 @@ final class GatewayIngestion {
       try {
         channel.ingress().tick(now);
         channel.delivery().tick(now);
+        channel.commands().tick(now);
         if (now >= nextMetrics) {
           channel.metrics().set(spool.stats(channel.tenant()));
         }
@@ -145,6 +149,7 @@ final class GatewayIngestion {
   synchronized void stop() {
     for (var channel : channels) {
       channel.delivery().stop();
+      channel.commands().stop();
       try {
         channel.mqtt().close();
       } catch (MqttException failure) {
@@ -164,5 +169,6 @@ final class GatewayIngestion {
       GatewayMqtt mqtt,
       GatewayIngress ingress,
       GatewayDelivery delivery,
+      GatewayCommands commands,
       AtomicReference<GatewaySpool.Stats> metrics) {}
 }

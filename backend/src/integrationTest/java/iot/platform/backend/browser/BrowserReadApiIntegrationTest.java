@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import iot.platform.backend.BackendApplication;
 import iot.platform.backend.analytics.TrendStorage.Resolution;
+import iot.platform.control.CommandProtocol;
+import iot.platform.control.proto.PendingCommands;
+import iot.platform.control.proto.SamplingAcknowledgment;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.net.URI;
@@ -70,6 +73,7 @@ class BrowserReadApiIntegrationTest {
             verifyLogin(a);
             String cursor = verifyPagination(a);
             verifyTrends(a, now);
+            verifyCommands(a, b, port, owner);
             verifySwitchAndRevoke(a, b, owner, cursor, now);
           }
         }
@@ -290,6 +294,141 @@ class BrowserReadApiIntegrationTest {
     assertProblem(a.get("/sensors"), 401, "AUTHENTICATION_REQUIRED");
   }
 
+  private static void verifyCommands(Browser a, Browser b, int port, Connection owner)
+      throws Exception {
+    var browserPath = "/sensors/" + SENSOR + "/commands";
+    var csrf = a.csrf();
+    assertProblem(
+        a.send("POST", browserPath, "{\"enabled\":false}", null, "missing-csrf"),
+        403,
+        "INVALID_CSRF");
+    assertProblem(a.send("POST", browserPath, "{}", csrf, "missing-state"), 400, "INVALID_COMMAND");
+    var accepted = a.send("POST", browserPath, "{\"enabled\":false}", csrf, "pause");
+    var pause = body(accepted, 202);
+    assertEquals("pending", pause.path("status").asText());
+    String id = pause.path("commandId").asText();
+    String statusPath = "/commands/" + id;
+    assertEquals("/api/v1" + statusPath, accepted.headers().firstValue("Location").orElseThrow());
+    assertEquals(
+        pause, body(a.send("POST", browserPath, "{\"enabled\":false}", csrf, "pause"), 202));
+    assertProblem(
+        a.send("POST", browserPath, "{\"enabled\":true}", csrf, "pause"),
+        409,
+        "IDEMPOTENCY_CONFLICT");
+    body(b.send("POST", "/session", credentials("operator-b", TEST_PASSWORD), b.csrf()), 200);
+    assertProblem(
+        b.send("POST", browserPath, "{\"enabled\":true}", b.csrf(), "pause"), 403, "FORBIDDEN");
+    assertProblem(b.get(statusPath), 404, "RESOURCE_NOT_FOUND");
+
+    String service = "http://127.0.0.1:" + port + CommandProtocol.PATH;
+    try (var gateway = HttpClient.newHttpClient()) {
+      var foreign =
+          gateway.send(
+              internal(service + "/pending", 'b').GET().build(),
+              HttpResponse.BodyHandlers.ofByteArray());
+      assertEquals(200, foreign.statusCode());
+      assertEquals(0, PendingCommands.parseFrom(foreign.body()).getCommandsCount());
+      var page =
+          gateway.send(
+              internal(service + "/pending", 'a').GET().build(),
+              HttpResponse.BodyHandlers.ofByteArray());
+      assertEquals(200, page.statusCode());
+      var wire = PendingCommands.parseFrom(page.body()).getCommands(0).getCommand();
+      assertEquals(id, wire.getCommandId());
+      assertTrue(wire.hasEnabled());
+      assertFalse(wire.getEnabled());
+
+      var ack = ack(pause, false);
+      assertEquals(404, sendAck(gateway, service, 'b', ack));
+      assertEquals(409, sendAck(gateway, service, 'a', ack.toBuilder().setVersion(99).build()));
+      assertEquals(204, sendAck(gateway, service, 'a', ack));
+      assertEquals(204, sendAck(gateway, service, 'a', ack));
+      assertEquals("applied", body(a.get(statusPath), 200).path("status").asText());
+      assertEquals(
+          pause, body(a.send("POST", browserPath, "{\"enabled\":false}", csrf, "pause"), 202));
+
+      var late = body(a.send("POST", browserPath, "{\"enabled\":true}", csrf, "late"), 202);
+      var lateId = late.path("commandId").asText();
+      Instant applied = Instant.now().minusSeconds(90).truncatedTo(ChronoUnit.MILLIS);
+      try (var update =
+          owner.prepareStatement(
+              "UPDATE registry.commands SET created_at=?, expires_at=? WHERE command_id=?")) {
+        update.setObject(1, applied.minusSeconds(2).atOffset(ZoneOffset.UTC));
+        update.setObject(2, applied.plusSeconds(58).atOffset(ZoneOffset.UTC));
+        update.setObject(3, UUID.fromString(lateId));
+        assertEquals(1, update.executeUpdate());
+      }
+      var latePath = "/commands/" + lateId;
+      assertEquals("expired", body(a.get(latePath), 200).path("status").asText());
+      var lateAck = ack(late, true).toBuilder().setAppliedAtMs(applied.toEpochMilli()).build();
+      assertEquals(204, sendAck(gateway, service, 'a', lateAck));
+      var expired = body(a.get(latePath), 200);
+      assertEquals("expired", expired.path("status").asText());
+      assertEquals("COMMAND_EXPIRED", expired.path("reasonCode").asText());
+      assertTrue(expired.path("confirmedEnabled").asBoolean());
+      assertTrue(
+          body(a.get("/sensors?limit=1"), 200)
+              .path("items")
+              .get(0)
+              .path("confirmedEnabled")
+              .asBoolean());
+      try (var audit =
+          owner.prepareStatement(
+              "SELECT ack_received_at IS NOT NULL FROM registry.commands WHERE command_id=?")) {
+        audit.setObject(1, UUID.fromString(lateId));
+        try (var row = audit.executeQuery()) {
+          assertTrue(row.next());
+          assertTrue(row.getBoolean(1));
+        }
+      }
+
+      var stale = body(a.send("POST", browserPath, "{\"enabled\":false}", csrf, "stale"), 202);
+      var latest = body(a.send("POST", browserPath, "{\"enabled\":true}", csrf, "latest"), 202);
+      assertEquals(stale.path("version").asLong() + 1, latest.path("version").asLong());
+      var stalePath = "/commands/" + stale.path("commandId").asText();
+      assertEquals("superseded", body(a.get(stalePath), 200).path("status").asText());
+      assertEquals(204, sendAck(gateway, service, 'a', ack(latest, true)));
+      assertEquals(204, sendAck(gateway, service, 'a', ack(stale, false)));
+      assertEquals("superseded", body(a.get(stalePath), 200).path("status").asText());
+      assertTrue(
+          body(a.get("/sensors?limit=1"), 200)
+              .path("items")
+              .get(0)
+              .path("confirmedEnabled")
+              .asBoolean());
+    }
+  }
+
+  private static HttpRequest.Builder internal(String url, char tenant) {
+    return HttpRequest.newBuilder(URI.create(url))
+        .timeout(Duration.ofSeconds(10))
+        .header("Authorization", "Bearer " + Character.toString(tenant).repeat(48))
+        .header("Accept", CommandProtocol.CONTENT_TYPE);
+  }
+
+  private static int sendAck(
+      HttpClient client, String service, char tenant, SamplingAcknowledgment ack) throws Exception {
+    return client
+        .send(
+            internal(service + "/" + ack.getCommandId() + "/ack", tenant)
+                .header("Content-Type", CommandProtocol.CONTENT_TYPE)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(ack.toByteArray()))
+                .build(),
+            HttpResponse.BodyHandlers.discarding())
+        .statusCode();
+  }
+
+  private static SamplingAcknowledgment ack(JsonNode command, boolean enabled) {
+    return SamplingAcknowledgment.newBuilder()
+        .setSchemaVersion(CommandProtocol.VERSION)
+        .setCommandId(command.path("commandId").asText())
+        .setSensorId(command.path("sensorId").asText())
+        .setVersion(command.path("version").asLong())
+        .setEnabled(enabled)
+        .setAppliedAtMs(Instant.parse(command.path("createdAt").asText()).toEpochMilli())
+        .build();
+  }
+
   private static double historicalMean(Browser browser, Instant now) throws Exception {
     Instant end = Resolution.QUARTER_HOUR.endOf(now).minus(QUARTER);
     var bucket =
@@ -348,7 +487,15 @@ class BrowserReadApiIntegrationTest {
 
     HttpResponse<String> send(String method, String path, String content, String csrf)
         throws Exception {
+      return send(method, path, content, csrf, null);
+    }
+
+    HttpResponse<String> send(String method, String path, String content, String csrf, String key)
+        throws Exception {
       var request = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(15));
+      if (key != null) {
+        request.header("Idempotency-Key", key);
+      }
       if (csrf != null) {
         request.header("X-CSRF-TOKEN", csrf);
       }

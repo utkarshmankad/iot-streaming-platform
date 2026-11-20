@@ -148,6 +148,7 @@ val coverageClasses = files(services.map { service ->
             exclude(
                 "iot/platform/registry/proto/**",
                 "iot/platform/telemetry/proto/**",
+                "iot/platform/control/proto/**",
                 "iot/platform/backend/BackendApplication.class",
                 "iot/platform/gateway/GatewayApplication.class",
                 "iot/platform/simulator/SimulatorApplication.class",

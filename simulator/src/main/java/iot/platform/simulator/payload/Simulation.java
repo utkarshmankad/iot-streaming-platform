@@ -66,10 +66,11 @@ final class Simulation {
       for (var entry :
           streams.stream().collect(Collectors.groupingBy(SensorStream::device)).entrySet()) {
         var device = entry.getKey();
-        sessions.put(
-            device,
+        var session =
             new MqttDeviceSession(
-                uri, device, passwords.getOrDefault(device.principal(), ""), entry.getValue()));
+                uri, device, passwords.getOrDefault(device.principal(), ""), entry.getValue());
+        sessions.put(device, session);
+        session.restore(outbox);
         if (!statistics.containsKey(device.tenantId())) {
           registerMetrics(meters, device.tenantId());
         }
@@ -83,20 +84,20 @@ final class Simulation {
   @Scheduled(fixedDelay = 50)
   synchronized void tick() throws SQLException {
     long now = clock.millis();
+    for (var session : sessions.values()) {
+      session.flush(outbox, now);
+    }
     if (faultSilence == null || !Files.exists(faultSilence)) {
       var events = new ArrayList<SimulatorOutbox.Intent>();
       for (var stream : streams) {
         long observed = stream.observationSlot(now);
-        if (observed > previousTick) {
+        if (observed > previousTick && sessions.get(stream.device()).enabled(stream)) {
           events.add(new SimulatorOutbox.Intent(stream, observed));
         }
       }
       if (!events.isEmpty()) {
         outbox.generate(events, seed);
       }
-    }
-    for (var session : sessions.values()) {
-      session.flush(outbox, now);
     }
     for (var stream : streams) {
       var session = sessions.get(stream.device());
@@ -106,7 +107,8 @@ final class Simulation {
                 .setSchemaVersion(TelemetryValidation.VERSION)
                 .setSensorId(stream.sensorId().toString())
                 .setObservedAtMs(now)
-                .setEnabled(true)
+                .setEnabled(session.enabled(stream))
+                .setAppliedCommandVersion(session.appliedVersion(stream))
                 .build();
         session.publish(stream.topic("heartbeat"), heartbeat.toByteArray(), 0);
       }

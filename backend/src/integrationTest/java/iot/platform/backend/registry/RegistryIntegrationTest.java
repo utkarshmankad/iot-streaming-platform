@@ -139,9 +139,11 @@ class RegistryIntegrationTest {
           var jdbc = runtime.getBean(JdbcClient.class);
           assertEquals(
               0, jdbc.sql("SELECT count(*) FROM registry.sensors").query(Integer.class).single());
+          assertEquals(
+              0, jdbc.sql("UPDATE registry.sensor_state SET desired_enabled=false").update());
           assertThrows(
               org.springframework.dao.DataAccessException.class,
-              () -> jdbc.sql("UPDATE registry.sensor_state SET desired_enabled=false").update());
+              () -> jdbc.sql("UPDATE registry.sensor_state SET last_heartbeat_at=now()").update());
 
           sql.execute(
               "UPDATE registry.sensor_schema_versions SET accepted=false WHERE type_code='temperature'");

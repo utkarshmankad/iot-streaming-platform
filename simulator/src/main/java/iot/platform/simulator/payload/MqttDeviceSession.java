@@ -1,11 +1,16 @@
 package iot.platform.simulator.payload;
 
 import com.google.protobuf.InvalidProtocolBufferException;
+import iot.platform.control.CommandProtocol;
+import iot.platform.control.proto.SamplingAcknowledgment;
+import iot.platform.control.proto.SamplingCommand;
 import iot.platform.telemetry.TelemetryValidation;
 import iot.platform.telemetry.proto.TelemetryReceipt;
 import java.nio.charset.StandardCharsets;
 import java.sql.SQLException;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -25,7 +30,11 @@ final class MqttDeviceSession implements AutoCloseable {
   private final MqttAsyncClient client;
   private final MqttConnectionOptions options = new MqttConnectionOptions();
   private final SensorStream.Device device;
-  private final String receiptFilter;
+  private final String[] filters;
+  private final Map<String, SensorStream> commandTopics;
+  private final Map<SensorStream, SamplingAcknowledgment> state = new HashMap<>();
+  private final LinkedHashSet<SensorStream> announce = new LinkedHashSet<>();
+  private final ArrayBlockingQueue<Command> commands = new ArrayBlockingQueue<>(256);
   private final Map<String, SensorStream> receiptTopics;
   private final ArrayBlockingQueue<Receipt> receipts = new ArrayBlockingQueue<>(256);
   private IMqttToken connection;
@@ -41,7 +50,12 @@ final class MqttDeviceSession implements AutoCloseable {
           "A generated MQTT credential is required for each demo device");
     }
     this.device = device;
-    receiptFilter = device.topicPrefix() + "+/receipt";
+    filters = new String[] {device.topicPrefix() + "+/receipt", device.topicPrefix() + "+/command"};
+    commandTopics =
+        streams.stream()
+            .collect(
+                Collectors.toUnmodifiableMap(
+                    stream -> stream.topic("command"), Function.identity()));
     receiptTopics =
         streams.stream()
             .collect(
@@ -74,11 +88,12 @@ final class MqttDeviceSession implements AutoCloseable {
     try {
       if (!client.isConnected()) {
         subscription = null;
+        announce.addAll(state.keySet());
         connection = client.connect(options);
         return false;
       }
       if (subscription == null) {
-        subscription = client.subscribe(receiptFilter, 1);
+        subscription = client.subscribe(filters, new int[] {1, 1});
         return false;
       }
       if (subscription.getException() != null
@@ -104,6 +119,25 @@ final class MqttDeviceSession implements AutoCloseable {
     nextAttempt = now + delay + Math.floorMod(device.clientId().hashCode() ^ failures, 250);
   }
 
+  void restore(SimulatorOutbox outbox) throws SQLException {
+    for (var stream : commandTopics.values()) {
+      var prior = outbox.sampling(stream);
+      if (prior != null) {
+        state.put(stream, prior);
+      }
+    }
+  }
+
+  boolean enabled(SensorStream stream) {
+    var applied = state.get(stream);
+    return applied == null || applied.getEnabled();
+  }
+
+  long appliedVersion(SensorStream stream) {
+    var applied = state.get(stream);
+    return applied == null ? 0 : applied.getVersion();
+  }
+
   void flush(SimulatorOutbox outbox, long now) throws SQLException {
     for (int handled = 0; handled < 256; handled++) {
       var receipt = receipts.poll();
@@ -112,8 +146,27 @@ final class MqttDeviceSession implements AutoCloseable {
       }
       outbox.acknowledge(receipt.stream(), receipt.payload());
     }
+    for (int handled = 0; handled < 64; handled++) {
+      var received = commands.poll();
+      if (received == null) {
+        break;
+      }
+      var applied = outbox.apply(received.stream(), received.value(), System.currentTimeMillis());
+      if (applied != null) {
+        state.put(received.stream(), applied);
+        announce.add(received.stream());
+      }
+    }
     if (!ready(now)) {
       return;
+    }
+    var acknowledgments = announce.iterator();
+    for (int sent = 0; sent < 16 && acknowledgments.hasNext(); sent++) {
+      var stream = acknowledgments.next();
+      if (!publish(stream.topic("command-ack"), state.get(stream).toByteArray(), 1)) {
+        break;
+      }
+      acknowledgments.remove();
     }
     int available = Math.min(32, 64 - client.getPendingTokens().length);
     if (available <= 0) {
@@ -150,9 +203,24 @@ final class MqttDeviceSession implements AutoCloseable {
     }
   }
 
+  private record Command(SensorStream stream, SamplingCommand value) {}
+
   private final class BrokerCallback implements MqttCallback {
     @Override
     public void messageArrived(String topic, MqttMessage message) {
+      SensorStream control = commandTopics.get(topic);
+      if (control != null) {
+        if (message.getQos() == 1
+            && !message.isRetained()
+            && message.getPayload().length <= CommandProtocol.MAX_PACKET_BYTES) {
+          try {
+            commands.offer(new Command(control, SamplingCommand.parseFrom(message.getPayload())));
+          } catch (InvalidProtocolBufferException malformed) {
+            // The authorized gateway retries pending commands until they expire.
+          }
+        }
+        return;
+      }
       SensorStream stream = receiptTopics.get(topic);
       if (stream == null
           || message.getQos() != 1

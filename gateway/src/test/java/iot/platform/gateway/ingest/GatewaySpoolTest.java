@@ -20,6 +20,24 @@ class GatewaySpoolTest {
   @TempDir Path directory;
 
   @Test
+  void retainsTenantScopedAcknowledgmentsAcrossRestart() throws Exception {
+    var file = directory.resolve("command-spool.sqlite");
+    var shared = UUID.randomUUID().toString();
+    try (var spool = GatewaySpool.open(file, 10_000)) {
+      spool.queueAck(TENANT_A, shared, new byte[] {1});
+      spool.queueAck(TENANT_A, shared, new byte[] {9});
+      spool.queueAck(TENANT_B, shared, new byte[] {2});
+    }
+    try (var spool = GatewaySpool.open(file, 10_000)) {
+      assertArrayEquals(new byte[] {1}, spool.nextAck(TENANT_A).payload());
+      assertArrayEquals(new byte[] {2}, spool.nextAck(TENANT_B).payload());
+      spool.finishAck(TENANT_A, shared);
+      assertNull(spool.nextAck(TENANT_A));
+      assertEquals(shared, spool.nextAck(TENANT_B).id());
+    }
+  }
+
+  @Test
   void admitsAtomicallyByTenantAndRecognizesDuplicateConflictingAndFullEvents() throws Exception {
     var file = directory.resolve("volume/spool.sqlite");
     var original = reading(1, "original", NOW);

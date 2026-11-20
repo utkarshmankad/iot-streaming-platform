@@ -20,7 +20,8 @@ final class GatewayMqtt implements AutoCloseable {
   private final MqttAsyncClient client;
   private final MqttConnectionOptions options = new MqttConnectionOptions();
   private final ArrayBlockingQueue<Incoming> messages = new ArrayBlockingQueue<>(2048);
-  private final String filter;
+  private final ArrayBlockingQueue<Incoming> control = new ArrayBlockingQueue<>(256);
+  private final String[] filters;
   private final Counter overflow;
   private IMqttToken connection;
   private IMqttToken subscription;
@@ -33,7 +34,8 @@ final class GatewayMqtt implements AutoCloseable {
       throw new IllegalArgumentException("A generated MQTT password is required for the gateway");
     }
     this.overflow = overflow;
-    filter = "iot/v1/" + tenant + "/+/+/telemetry";
+    String prefix = "iot/v1/" + tenant + "/+/+/";
+    filters = new String[] {prefix + "telemetry", prefix + "command-ack"};
     options.setUserName(principal);
     options.setPassword(password.getBytes(StandardCharsets.UTF_8));
     options.setCleanStart(true);
@@ -62,7 +64,7 @@ final class GatewayMqtt implements AutoCloseable {
         subscription = null;
         connection = client.connect(options);
       } else if (subscription == null) {
-        subscription = client.subscribe(filter, 1);
+        subscription = client.subscribe(filters, new int[] {1, 1});
       } else if (subscription.getException() != null
           || (subscription.isComplete()
               && Arrays.stream(subscription.getReasonCodes()).anyMatch(code -> code != 1))) {
@@ -83,6 +85,21 @@ final class GatewayMqtt implements AutoCloseable {
 
   Incoming poll() {
     return messages.poll();
+  }
+
+  Incoming commandAck() {
+    return control.poll();
+  }
+
+  void command(String topic, byte[] payload) {
+    if (client.getPendingTokens().length >= 48) {
+      return;
+    }
+    try {
+      client.publish(topic, payload, 1, false);
+    } catch (MqttException unavailable) {
+      // Backend polling retries unacknowledged commands within the validity window.
+    }
   }
 
   void receipt(String telemetryTopic, TelemetryReceipt value) {
@@ -110,9 +127,9 @@ final class GatewayMqtt implements AutoCloseable {
     @Override
     public void messageArrived(String topic, MqttMessage message) {
       if (message.getQos() == 1 && !message.isRetained()) {
-        // A full inbox leaves the producer waiting for an application receipt and it retries.
-        if (!messages.offer(
-            new Incoming(topic, message.getPayload(), System.currentTimeMillis()))) {
+        // Keep acknowledgement traffic from competing for room in the telemetry inbox.
+        var queue = topic.endsWith("/command-ack") ? control : messages;
+        if (!queue.offer(new Incoming(topic, message.getPayload(), System.currentTimeMillis()))) {
           overflow.increment();
         }
       }

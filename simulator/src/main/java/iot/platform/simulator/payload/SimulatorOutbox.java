@@ -1,5 +1,8 @@
 package iot.platform.simulator.payload;
 
+import iot.platform.control.CommandProtocol;
+import iot.platform.control.proto.SamplingAcknowledgment;
+import iot.platform.control.proto.SamplingCommand;
 import iot.platform.telemetry.TelemetryValidation;
 import iot.platform.telemetry.proto.TelemetryReceipt;
 import java.io.IOException;
@@ -69,6 +72,14 @@ final class SimulatorOutbox implements AutoCloseable {
               accepted INTEGER NOT NULL DEFAULT 0, rejected INTEGER NOT NULL DEFAULT 0
           )
           """);
+      sql.execute(
+          """
+          CREATE TABLE IF NOT EXISTS sampling_state (
+              tenant TEXT NOT NULL, sensor TEXT NOT NULL, command TEXT NOT NULL,
+              version INTEGER NOT NULL, enabled INTEGER NOT NULL, applied_ms INTEGER NOT NULL,
+              PRIMARY KEY (tenant, sensor)
+          )
+          """);
       if (faultTrace) {
         sql.execute(
             """
@@ -84,6 +95,74 @@ final class SimulatorOutbox implements AutoCloseable {
       throw failure;
     }
     return new SimulatorOutbox(db, limitPerTenant, faultTrace);
+  }
+
+  SamplingAcknowledgment sampling(SensorStream stream) throws SQLException {
+    try (var query =
+        db.prepareStatement(
+            """
+        SELECT command,version,enabled,applied_ms FROM sampling_state WHERE tenant=? AND sensor=?
+        """)) {
+      query.setString(1, stream.device().tenantId().toString());
+      query.setString(2, stream.sensorId().toString());
+      try (var row = query.executeQuery()) {
+        return row.next()
+            ? acknowledgment(
+                stream, row.getString(1), row.getLong(2), row.getBoolean(3), row.getLong(4))
+            : null;
+      }
+    }
+  }
+
+  SamplingAcknowledgment apply(SensorStream stream, SamplingCommand command, long now)
+      throws SQLException {
+    if (!CommandProtocol.valid(command)
+        || !stream.sensorId().toString().equals(command.getSensorId())) {
+      return null;
+    }
+    return transaction(
+        () -> {
+          var prior = sampling(stream);
+          if (prior != null && command.getVersion() <= prior.getVersion()) {
+            return prior.getVersion() == command.getVersion()
+                    && prior.getCommandId().equals(command.getCommandId())
+                    && prior.getEnabled() == command.getEnabled()
+                ? prior
+                : null;
+          }
+          if (now >= command.getExpiresAtMs()) {
+            return null;
+          }
+          try (var write =
+              db.prepareStatement(
+                  """
+          INSERT INTO sampling_state VALUES (?,?,?,?,?,?)
+          ON CONFLICT (tenant,sensor) DO UPDATE SET command=excluded.command,
+            version=excluded.version,enabled=excluded.enabled,applied_ms=excluded.applied_ms
+          """)) {
+            write.setString(1, stream.device().tenantId().toString());
+            write.setString(2, stream.sensorId().toString());
+            write.setString(3, command.getCommandId());
+            write.setLong(4, command.getVersion());
+            write.setBoolean(5, command.getEnabled());
+            write.setLong(6, now);
+            write.executeUpdate();
+          }
+          return acknowledgment(
+              stream, command.getCommandId(), command.getVersion(), command.getEnabled(), now);
+        });
+  }
+
+  private static SamplingAcknowledgment acknowledgment(
+      SensorStream stream, String command, long version, boolean enabled, long now) {
+    return SamplingAcknowledgment.newBuilder()
+        .setSchemaVersion(CommandProtocol.VERSION)
+        .setSensorId(stream.sensorId().toString())
+        .setCommandId(command)
+        .setVersion(version)
+        .setEnabled(enabled)
+        .setAppliedAtMs(now)
+        .build();
   }
 
   void generate(Collection<Intent> events, long seed) throws SQLException {

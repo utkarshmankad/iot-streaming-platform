@@ -100,9 +100,9 @@ printf '%s' "$operator_password" | jq -Rs '{username: "operator-a", password: .}
 sensor_id="$(curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/sensors?limit=1" |
   jq -er 'select(.items | length == 1) | .items[0] | select(.lastObservedAt != null).sensorId')"
 bounds="$(python3 - <<'PY'
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-now = datetime.now(UTC)
+now = datetime.now(timezone.utc)
 start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0)
 for stamp in (start - timedelta(minutes=15), start + timedelta(minutes=15)):
     print(stamp.isoformat().replace("+00:00", "Z"), end=" ")
@@ -116,3 +116,58 @@ curl --fail --silent --show-error --cookie "$cookies" --get \
     '.bucket == "15m" and (.series | length == 1)
     and (.series[0] | .sensorId == $sensor_id and (.buckets | length == 2))' >/dev/null
 printf '%s\n' 'Browser can authenticate and query tenant-scoped trends through Nginx.'
+
+# Capture a new CSRF token after login rotated the session.
+csrf="$(curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/session/csrf")"
+csrf_header="$(jq -er .headerName <<< "$csrf")"
+csrf_token="$(jq -er .token <<< "$csrf")"
+
+command() {
+  local enabled=$1 key=$2
+  curl --fail --silent --show-error --cookie "$cookies" \
+    --header "$csrf_header: $csrf_token" --header 'Content-Type: application/json' \
+    --header "Idempotency-Key: $key" --data "{\"enabled\":$enabled}" \
+    "$url/api/v1/sensors/$sensor_id/commands" | jq -er .commandId
+}
+
+await_command() {
+  local id=$1 enabled=$2
+  for attempt in {1..20}; do
+    if curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/commands/$id" |
+      jq -e --argjson enabled "$enabled" \
+        '.status == "applied" and .confirmedEnabled == $enabled' >/dev/null; then
+      return
+    fi
+    sleep 0.5
+  done
+  printf 'The simulator did not confirm the requested sampling state.\n' >&2
+  return 1
+}
+
+readings_after_command() {
+  stack exec -T timescaledb psql -X -qAt -v ON_ERROR_STOP=1 -U iot -d iot -v command_id="$1" <<'SQL'
+SELECT count(*)
+FROM telemetry.readings r
+JOIN registry.commands c USING (tenant_id, sensor_id)
+WHERE c.command_id = :'command_id' AND r.observed_at > c.applied_at;
+SQL
+}
+
+run_key="$(openssl rand -hex 8)"
+pause="$(command false "smoke-pause-$run_key")"
+await_command "$pause" false
+sleep 2
+[[ "$(readings_after_command "$pause")" == 0 ]]
+resume="$(command true "smoke-resume-$run_key")"
+await_command "$resume" true
+for attempt in {1..12}; do
+  if (( $(readings_after_command "$resume") > 0 )); then
+    printf '%s\n' 'Simulator confirmed pause and resume and produced new readings after resume.'
+    break
+  fi
+  if [[ "$attempt" == 12 ]]; then
+    printf '%s\n' 'Expected a new reading after simulator resume.' >&2
+    exit 1
+  fi
+  sleep 0.5
+done

@@ -46,6 +46,13 @@ final class GatewaySpool implements AutoCloseable {
             UNIQUE (tenant, sensor, event)
           )
           """);
+      sql.execute(
+          """
+          CREATE TABLE IF NOT EXISTS command_acks (
+            tenant TEXT NOT NULL, command TEXT NOT NULL, payload BLOB NOT NULL,
+            PRIMARY KEY (tenant, command)
+          )
+          """);
       sql.execute("CREATE INDEX IF NOT EXISTS spool_received ON spool (tenant, received_ms)");
       sql.execute(
           "CREATE INDEX IF NOT EXISTS spool_new ON spool (tenant, received_ms, id) WHERE attempts=0");
@@ -368,6 +375,44 @@ final class GatewaySpool implements AutoCloseable {
       db.setAutoCommit(true);
     }
   }
+
+  void queueAck(UUID tenant, String command, byte[] payload) throws SQLException {
+    try (var write =
+        db.prepareStatement(
+            """
+        INSERT INTO command_acks(tenant,command,payload)
+        SELECT ?,?,? WHERE (SELECT count(*) FROM command_acks WHERE tenant=?) < 2048
+        ON CONFLICT DO NOTHING
+        """)) {
+      write.setString(1, tenant.toString());
+      write.setString(2, command);
+      write.setBytes(3, payload);
+      write.setString(4, tenant.toString());
+      write.executeUpdate();
+    }
+  }
+
+  CommandAck nextAck(UUID tenant) throws SQLException {
+    try (var read =
+        db.prepareStatement(
+            "SELECT command,payload FROM command_acks WHERE tenant=? ORDER BY rowid LIMIT 1")) {
+      read.setString(1, tenant.toString());
+      try (var rows = read.executeQuery()) {
+        return rows.next() ? new CommandAck(rows.getString(1), rows.getBytes(2)) : null;
+      }
+    }
+  }
+
+  void finishAck(UUID tenant, String command) throws SQLException {
+    try (var remove =
+        db.prepareStatement("DELETE FROM command_acks WHERE tenant=? AND command=?")) {
+      remove.setString(1, tenant.toString());
+      remove.setString(2, command);
+      remove.executeUpdate();
+    }
+  }
+
+  record CommandAck(String id, byte[] payload) {}
 
   @Override
   public void close() throws SQLException {

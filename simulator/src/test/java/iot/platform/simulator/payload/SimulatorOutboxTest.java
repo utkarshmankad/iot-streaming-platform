@@ -3,6 +3,7 @@ package iot.platform.simulator.payload;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.google.protobuf.ByteString;
+import iot.platform.control.proto.SamplingCommand;
 import iot.platform.telemetry.SensorType;
 import iot.platform.telemetry.TelemetryValidation;
 import iot.platform.telemetry.proto.TelemetryReceipt;
@@ -18,6 +19,46 @@ class SimulatorOutboxTest {
   private static final long SEED = 17;
 
   @TempDir Path directory;
+
+  @Test
+  void persistsCommandStateAndRejectsExpiredOrStaleDeliveries() throws Exception {
+    var sensor = stream(1, 2, SensorType.TEMPERATURE);
+    var otherTenant = stream(2, 2, SensorType.TEMPERATURE);
+    var file = directory.resolve("commands.sqlite");
+    var pause =
+        SamplingCommand.newBuilder()
+            .setSchemaVersion(1)
+            .setCommandId(UUID.randomUUID().toString())
+            .setSensorId(sensor.sensorId().toString())
+            .setVersion(2)
+            .setEnabled(false)
+            .setExpiresAtMs(NOW + 10_000)
+            .build();
+    try (var outbox = SimulatorOutbox.open(file, 10_000)) {
+      assertNull(outbox.sampling(sensor));
+      assertNull(outbox.apply(sensor, pause, NOW + 10_000));
+      var saved = outbox.apply(sensor, pause, NOW);
+      assertNotNull(saved);
+      assertFalse(saved.getEnabled());
+      assertEquals(NOW, saved.getAppliedAtMs());
+      assertNull(outbox.sampling(otherTenant));
+    }
+    try (var outbox = SimulatorOutbox.open(file, 10_000)) {
+      var saved = outbox.sampling(sensor);
+      assertEquals(saved, outbox.apply(sensor, pause, NOW + 11_000));
+      assertNull(outbox.apply(sensor, pause.toBuilder().setVersion(1).build(), NOW));
+      assertNull(outbox.apply(sensor, pause.toBuilder().setEnabled(true).build(), NOW));
+      var resume =
+          pause.toBuilder()
+              .setCommandId(UUID.randomUUID().toString())
+              .setVersion(3)
+              .setEnabled(true)
+              .build();
+      assertTrue(outbox.apply(sensor, resume, NOW + 1).getEnabled());
+      assertNull(outbox.apply(sensor, pause, NOW + 2));
+      assertEquals(3, outbox.sampling(sensor).getVersion());
+    }
+  }
 
   @Test
   void retriesOriginalBytesAfterRestartAndRequiresMatchingTerminalReceipt() throws Exception {

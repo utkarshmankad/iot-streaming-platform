@@ -160,7 +160,6 @@ paths:
         '503': {$ref: '#/components/responses/Unavailable'}
   /sensors/{id}/commands:
     post:
-      x-implementation-milestone: M3.1
       operationId: requestSensorCommand
       summary: Request an enabled state for a sensor
       description: Requires an operator role. Identical replays by tenant, actor, and sensor return the original accepted response.
@@ -170,7 +169,7 @@ paths:
         - name: Idempotency-Key
           in: header
           required: true
-          schema: {type: string, minLength: 1}
+          schema: {type: string, minLength: 1, maxLength: 128, pattern: '^[!-~]+$'}
       requestBody:
         required: true
         content:
@@ -202,14 +201,13 @@ paths:
         '503': {$ref: '#/components/responses/Unavailable'}
   /commands/{id}:
     get:
-      x-implementation-milestone: M3.1
       operationId: readSensorCommand
       summary: Read the acknowledged status of a requested sensor state
       parameters:
         - $ref: '#/components/parameters/ResourceId'
       responses:
         '200':
-          description: Current status of the command in the active tenant.
+          description: Current status of the command in the active tenant. A valid late acknowledgment leaves an expired command expired.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/CommandStatus'}

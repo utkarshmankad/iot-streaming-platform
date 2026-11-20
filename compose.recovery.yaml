@@ -1,0 +1,14 @@
+services:
+  timescaledb:
+    command: [postgres, -c, archive_mode=off]
+    volumes:
+      - ./ops/recovery/restore-wal.sh:/run/restore-wal.sh:ro
+      - type: bind
+        source: ${IOT_RESTORE_WAL:?A manifest-selected WAL archive is required}
+        target: /archive
+        read_only: true
+        bind:
+          create_host_path: false
+  backend:
+    environment:
+      IOT_CONTROL_RESTORE_HOLD: ${IOT_CONTROL_RESTORE_HOLD:-true}

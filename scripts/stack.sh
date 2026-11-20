@@ -78,4 +78,12 @@ fi
 
 export IOT_HTTP_PORT=${IOT_HTTP_PORT:-$default_port}
 export IOT_STACK_IMAGE_TAG=$profile
+backup_config=.env.backup-$profile
+if [ -f "$backup_config" ]; then
+    IOT_BACKUP_DIR=$(sed -n '1p' "$backup_config")
+    IOT_BACKUP_TARGET_ID=$(sed -n '2p' "$backup_config")
+    export IOT_BACKUP_DIR IOT_BACKUP_TARGET_ID
+    exec docker compose --env-file "$credentials" --project-name "$project" --profile "$profile" \
+        -f compose.yaml -f compose.backup.yaml "$@"
+fi
 exec docker compose --env-file "$credentials" --project-name "$project" --profile "$profile" -f compose.yaml "$@"

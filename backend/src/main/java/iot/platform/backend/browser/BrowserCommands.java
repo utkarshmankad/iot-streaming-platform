@@ -26,14 +26,17 @@ class BrowserCommands {
   private final CommandStore store;
   private final OperatorTenantAuthorizer memberships;
   private final long ttl;
+  private final boolean restoreHold;
 
   BrowserCommands(
       CommandStore store,
       OperatorTenantAuthorizer memberships,
-      @Value("${IOT_COMMAND_TTL_MS:60000}") long ttl) {
+      @Value("${IOT_COMMAND_TTL_MS:60000}") long ttl,
+      @Value("${IOT_CONTROL_RESTORE_HOLD:false}") boolean restoreHold) {
     this.store = store;
     this.memberships = memberships;
     this.ttl = Math.clamp(ttl, 1_000, 60_000);
+    this.restoreHold = restoreHold;
   }
 
   @PostMapping(value = "/api/v1/sensors/{sensor}/commands", consumes = "application/json")
@@ -50,6 +53,12 @@ class BrowserCommands {
     }
     if (!"operator".equals(role(principal))) {
       throw BrowserProblems.forbidden();
+    }
+    if (restoreHold) {
+      throw new BrowserProblems.Failure(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          "RECOVERY_HOLD",
+          "Sensor controls are held during recovery.");
     }
     if (request.enabled() == null || !key.matches("[!-~]{1,128}")) {
       throw BrowserProblems.bad(

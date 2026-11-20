@@ -127,6 +127,16 @@ def external_metrics(now):
         broker.clear()
     lines.append(f"iot_broker_metrics_available {int(len(broker) == len(BROKER_METRICS))}")
     lines.extend(f"{name} {value}" for name, value in broker.items())
+    configured = os.environ.get("IOT_BACKUP_CONFIGURED") == "true"
+    target = Path("/run/iot-backup")
+    if configured:
+        try:
+            online = (target / ".iot-target-id").read_text().strip() == os.environ["IOT_BACKUP_TARGET_ID"]
+            if online:
+                lines.append(f"iot_backup_available_bytes {shutil.disk_usage(target).free}")
+        except OSError:
+            online = False
+        lines.append(f"iot_backup_target_available {int(online)}")
     try:
         backup = json.loads((DATA / "backup-status.json").read_text())
         if not isinstance(backup, dict) or not isinstance(backup.get("checksum_failed"), bool):
@@ -139,7 +149,7 @@ def external_metrics(now):
         if verified is not None:
             lines.append(f"iot_backup_verified_timestamp_seconds {verified}")
     except FileNotFoundError:
-        lines.append("iot_backup_monitoring_enabled 0")
+        lines.append(f"iot_backup_monitoring_enabled {int(configured)}")
     except (OSError, ValueError):
         lines.append("iot_backup_monitoring_enabled 1")
     return "\n".join(lines) + "\n"

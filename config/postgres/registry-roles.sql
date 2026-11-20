@@ -8,3 +8,4 @@ ALTER ROLE iot_app PASSWORD :'app_password';
 CREATE SCHEMA IF NOT EXISTS registry AUTHORIZATION iot_migrate;
 CREATE SCHEMA IF NOT EXISTS telemetry AUTHORIZATION iot_migrate;
 CREATE EXTENSION IF NOT EXISTS timescaledb WITH SCHEMA public;
+GRANT EXECUTE ON FUNCTION pg_catalog.pg_ls_archive_statusdir() TO iot_migrate;

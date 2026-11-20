@@ -62,3 +62,5 @@ bash scripts/ci/browser.sh
 bash scripts/ci/performance.sh
 ./scripts/stack.sh test reset
 ```
+
+The point-in-time recovery drill runs in a fresh disposable source project after telemetry fault checks. It restores a timestamp into isolated volumes, verifies tenant isolation, rejects stale controls, replays queued event IDs and tests checksum rejection. It uploads `build/ci/recovery.json` and the isolated Compose logs.

@@ -31,6 +31,7 @@ class PlatformHealth {
     register(meters, "iot.wal.archive.enabled", "wal_archiving");
     register(meters, "iot.wal.last.archive.seconds", "last_wal_archive_seconds");
     register(meters, "iot.wal.archive.failures", "wal_archive_failures");
+    register(meters, "iot.wal.oldest.pending.seconds", "wal_pending_since");
     for (String outcome : new String[] {"applied", "expired", "failed", "superseded"}) {
       Gauge.builder("iot.command.outcomes", snapshot, data -> value(data, outcome + "_commands"))
           .tag("outcome", outcome)
@@ -41,7 +42,9 @@ class PlatformHealth {
   @Scheduled(initialDelay = 15_000, fixedDelay = 15_000)
   void refresh() {
     try {
-      snapshot.set(jdbc.queryForMap("SELECT * FROM telemetry.platform_health()"));
+      snapshot.set(
+          jdbc.queryForMap(
+              "SELECT *,telemetry.wal_pending_since() AS wal_pending_since FROM telemetry.platform_health()"));
     } catch (DataAccessException unavailable) {
       snapshot.set(Map.of());
     }

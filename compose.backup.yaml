@@ -1,0 +1,30 @@
+services:
+  timescaledb:
+    command:
+      - postgres
+      - -c
+      - archive_mode=on
+      - -c
+      - archive_timeout=300s
+      - -c
+      - archive_command=/bin/sh /run/backup-wal.sh "%p" "%f"
+    environment:
+      IOT_BACKUP_TARGET_ID: ${IOT_BACKUP_TARGET_ID:?Configure a backup target first}
+    volumes:
+      - ./ops/recovery/archive-wal.sh:/run/backup-wal.sh:ro
+      - type: bind
+        source: ${IOT_BACKUP_DIR:?Configure a backup target first}/wal
+        target: /archive
+        bind:
+          create_host_path: false
+  alarm-receiver:
+    environment:
+      IOT_BACKUP_CONFIGURED: "true"
+      IOT_BACKUP_TARGET_ID: ${IOT_BACKUP_TARGET_ID:?Configure a backup target first}
+    volumes:
+      - type: bind
+        source: ${IOT_BACKUP_DIR:?Configure a backup target first}/wal
+        target: /run/iot-backup
+        read_only: true
+        bind:
+          create_host_path: false

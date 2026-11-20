@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.sql.DriverManager;
 import java.util.Optional;
 import java.util.UUID;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.WebApplicationType;
@@ -47,10 +48,34 @@ class RegistryIntegrationTest {
             CREATE ROLE iot_migrate LOGIN PASSWORD 'test-migrate-fixture' NOSUPERUSER NOBYPASSRLS;
             CREATE ROLE iot_app LOGIN PASSWORD 'test-app-fixture' NOSUPERUSER NOBYPASSRLS;
             CREATE SCHEMA registry AUTHORIZATION iot_migrate;
+            CREATE SCHEMA telemetry AUTHORIZATION iot_migrate;
+            CREATE EXTENSION IF NOT EXISTS timescaledb WITH SCHEMA public;
+            """);
+        Flyway.configure()
+            .dataSource(database.getJdbcUrl(), "iot_migrate", "test-migrate-fixture")
+            .schemas("registry")
+            .createSchemas(false)
+            .target("1")
+            .load()
+            .migrate();
+        sql.execute(
+            """
+            INSERT INTO registry.tenants (tenant_id, slug, display_name)
+            VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'demo-a', 'Existing demo tenant')
             """);
         Path acl = directory.resolve("registry.acl");
         provision(database.getJdbcUrl(), acl);
         provision(database.getJdbcUrl(), acl);
+        try (var upgrade =
+            sql.executeQuery(
+                """
+            SELECT display_name, to_regclass('telemetry.readings') IS NOT NULL AS migrated
+            FROM registry.tenants WHERE slug='demo-a'
+            """)) {
+          assertTrue(upgrade.next());
+          assertEquals("Existing demo tenant", upgrade.getString("display_name"));
+          assertTrue(upgrade.getBoolean("migrated"));
+        }
         try (var counts =
             sql.executeQuery("SELECT count(*), count(DISTINCT sensor_id) FROM registry.sensors")) {
           assertTrue(counts.next());

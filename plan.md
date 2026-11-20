@@ -76,6 +76,8 @@ Record validated work discovered during implementation with a stable ID, origina
 
 - [ ] **FU-01 · Nightly mutation testing.** Origin: M0.5. After M1.4 and M3.1 add PIT coverage for the critical ingestion and command code to the nightly workflow and retain its report. Validate the scheduled run in M3.5. *(CI-03)*
 
+- [ ] **FU-02 · Reuse Gradle downloads in local image builds.** Origin: M1.4. After M1.5, verify that the laptop’s Compose build reuses one pinned Gradle download and shared Java build inputs for the three service images. Exercise both clean and warm builds and keep the existing offline recreation path. *(OPS-01, CI-01)*
+
 ## Change history
 
 Record changes to milestone sequence, tasks or exit gates here in the same pull request as the edit. Add one entry per change request with its date or version, a short summary, and the affected IDs or sections when applicable. Use a PR or commit reference when available. When a request changes more than one document, record its effect in each affected file.
@@ -101,3 +103,4 @@ Record changes to milestone sequence, tasks or exit gates here in the same pull 
 | M1.2 payload contracts and generator | [PR #23](https://github.com/utkarshmankad/iot-streaming-platform/pull/23) | Completed after merge. Verified all six sensor schemas, tenant-scoped durable generation, unchanged retries until a valid application receipt, and broker outage recovery. |
 | M1.3 gateway spool | This revision | Added per-tenant MQTT admission, durable receipts, SQLite queue accounting, and bounded HTTP delivery. Verified restart and retry using a real broker and a backend fixture. |
 | M1.3 gateway spool | [PR #25](https://github.com/utkarshmankad/iot-streaming-platform/pull/25) | Completed after merge. Verified tenant-scoped durable admissions, quota and duplicate behavior, and restart with a cached registry followed by correlated HTTP delivery. |
+| M1.4 transactional backend ingest | This revision | Added the internal Protobuf endpoint, TimescaleDB storage and tenant receipt ledger. Added coverage for mixed batches, concurrent claims, rollback and lost responses. Recorded repeated local container build downloads in FU-02. |

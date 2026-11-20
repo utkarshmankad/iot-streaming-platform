@@ -71,3 +71,16 @@ for attempt in {1..20}; do
   fi
   sleep 1
 done
+
+for attempt in {1..20}; do
+  if stack exec -T timescaledb psql -X -qAt -v ON_ERROR_STOP=1 -U iot -d iot \
+      -c 'SELECT count(DISTINCT tenant_id) FROM telemetry.readings' | grep -Fxq 2; then
+    printf '%s\n' 'TimescaleDB committed simulator readings for both tenants.'
+    break
+  fi
+  if [[ "$attempt" == 20 ]]; then
+    printf '%s\n' 'Expected committed TimescaleDB readings for both tenants.' >&2
+    exit 1
+  fi
+  sleep 1
+done

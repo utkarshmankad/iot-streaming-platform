@@ -14,7 +14,6 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @Profile("registry")
 class RegistryController {
-  private static final String BEARER = "Bearer ";
   private final GatewayRegistry registry;
 
   RegistryController(GatewayRegistry registry) {
@@ -25,11 +24,7 @@ class RegistryController {
   ResponseEntity<byte[]> registry(
       @RequestHeader(name = HttpHeaders.AUTHORIZATION, required = false) String auth,
       @RequestHeader(name = HttpHeaders.IF_NONE_MATCH, required = false) String version) {
-    String token =
-        auth != null && auth.regionMatches(true, 0, BEARER, 0, BEARER.length())
-            ? auth.substring(BEARER.length())
-            : null;
-    var snapshot = registry.snapshot(token);
+    var snapshot = registry.snapshot(GatewayAccess.bearerToken(auth));
     if (snapshot.isEmpty()) {
       return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
           .header(HttpHeaders.WWW_AUTHENTICATE, "Bearer")

@@ -51,3 +51,23 @@ stack exec -T mosquitto sh -ec '
     -t iot/v1/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa/+/+/telemetry -C 1 -W 35 -F "%q %l"
 ' | grep -Eq '^1 [1-9][0-9]+$'
 printf '%s\n' 'Simulator resumed authenticated QoS 1 telemetry after broker restart.'
+
+tenant_admissions_recorded() {
+  stack exec -T "$1" wget -qO- http://127.0.0.1:8080/actuator/prometheus |
+    awk -v metric="$2" '
+      index($1, metric "{tenant=") == 1 && $2 > 0 { tenants++ }
+      END { exit tenants != 2 }
+    '
+}
+for attempt in {1..20}; do
+  if tenant_admissions_recorded gateway iot_gateway_accepted_events_total &&
+     tenant_admissions_recorded simulator iot_simulator_accepted_events_total; then
+    printf '%s\n' 'Gateway durably accepted and acknowledged sensor readings for both tenants.'
+    break
+  fi
+  if [[ "$attempt" == 20 ]]; then
+    printf '%s\n' 'Expected durable gateway admissions and simulator receipts for both tenants.' >&2
+    exit 1
+  fi
+  sleep 1
+done

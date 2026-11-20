@@ -27,11 +27,17 @@ The gateway refreshes both authorized snapshots from the backend every 30 second
 
 The demo starts one stream per sensor type in each tenant, at one reading per second. Increase `IOT_STACK_SIM_STREAMS_PER_TYPE` to register more streams per type and tenant. Existing registrations are preserved on reprovisioning. Use a separate test dataset to try a lower count. Set `IOT_STACK_SIM_SEED` to reproduce a reading sequence for the same assignment and sample times. Set `IOT_STACK_SIM_MAX_BYTES_PER_TENANT` to adjust the pending Protobuf payload budget, which defaults to five decimal GB per tenant. Account for SQLite overhead and WAL when sizing Docker storage.
 
-The simulator publishes binary telemetry and heartbeats to the private broker. It keeps unacknowledged events across restarts and republishes the same bytes after a receipt timeout. Until the gateway spool arrives in M1.3, pending events will accumulate on the simulator volume.
+The simulator publishes binary telemetry and heartbeats to the private broker. It keeps unacknowledged events across restarts and republishes the same bytes after a receipt timeout. The gateway sends receipts once it durably queues readings or recognizes a queued duplicate.
+
+## Inspect the gateway spool
+
+The edge gateway stores original readings in `gateway.sqlite` on its named volume. Set `IOT_STACK_GATEWAY_MAX_BYTES_PER_TENANT` to change the pending payload budget from five decimal GB per tenant. Reserve additional disk space for SQLite tables, indexes and WAL. The gateway exposes per-tenant queue bytes, capacity, oldest age and admission outcomes through its internal Prometheus endpoint.
+
+The gateway uploads a tenant’s queue at 250 readings or when an eligible reading has waited a second. It preserves unconfirmed rows across backend outages and restarts, and it can resume with a verified cached registry while the backend is unreachable. The demo backend will begin committing these batches in M1.4. Until then the gateway retains accepted readings and retries delivery with backoff.
 
 ## Check services and restart offline
 
-Compose waits for service health before reporting startup complete. Logs rotate at 20 MB with up to five files per container. Java readiness probes and metrics stay on the Docker networks. Nginx serves the dashboard and forwards `/api/` to the Java backend. The backend serves health and metrics and has an authenticated internal registry endpoint. Browser APIs and the gateway telemetry subscriber arrive in later milestones.
+Compose waits for service health before reporting startup complete. Logs rotate at 20 MB with up to five files per container. Java readiness probes and metrics stay on the Docker networks. Nginx serves the dashboard and forwards `/api/` to the Java backend. The backend serves health and metrics and has an authenticated internal registry endpoint. Browser APIs arrive in later milestones.
 
 ```sh
 docker compose --env-file .env.stack --profile local logs --tail 100

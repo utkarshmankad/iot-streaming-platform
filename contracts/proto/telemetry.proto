@@ -34,3 +34,33 @@ message TelemetryReceipt {
   Outcome outcome = 4;
   string reason_code = 5;
 }
+
+// An authenticated gateway sends each tenant's original MQTT payloads in a separate batch.
+message TelemetryBatch {
+  repeated TelemetryBatchEntry entries = 1;
+}
+
+message TelemetryBatchEntry {
+  string correlation_id = 1;
+  string tenant_id = 2;
+  string device_id = 3;
+  string sensor_id = 4;
+  bytes payload = 5;
+  int64 gateway_received_at_ms = 6;
+}
+
+message TelemetryBatchResponse {
+  repeated TelemetryBatchResult results = 1;
+}
+
+message TelemetryBatchResult {
+  enum Outcome {
+    OUTCOME_UNSPECIFIED = 0;
+    COMMITTED = 1;
+    DUPLICATE = 2;
+    REJECTED = 3;
+  }
+  string correlation_id = 1;
+  Outcome outcome = 2;
+  string reason_code = 3;
+}

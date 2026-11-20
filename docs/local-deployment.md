@@ -39,6 +39,8 @@ The gateway uploads a tenant’s queue at 250 readings or when an eligible readi
 
 The stack generates separate passwords for `operator-a` and `operator-b` in the owner-only `.env.stack` file. Each demo identity starts with access to one tenant. The browser authentication flow starts with `GET /api/v1/session/csrf`, then uses the returned header and token to submit `POST /api/v1/session`. Keep the same cookie jar across requests. Request a new CSRF token after login or tenant switching. The cookie expires after 30 minutes of inactivity.
 
+Sign in at the dashboard and use the tenant selector when your operator has more than one active membership. Filter the registry by display name or sensor ID. Plot up to ten sensors for a single metric and select the resolution and time range. The effective range is shown in UTC. Expand **View bucket values** to inspect counts, gaps and partial buckets.
+
 Authenticated requests to `GET /api/v1/sensors` and `GET /api/v1/trends` use the active tenant. The versioned contract includes exact query parameters and error responses. [Browser OpenAPI](../contracts/openapi/browser-v1.yaml)
 
 ## Trend storage maintenance

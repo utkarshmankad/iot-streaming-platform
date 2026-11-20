@@ -15,13 +15,28 @@ GitHub Actions runs on pull requests to `main`, pushes to `main`, and manual dis
 | Dependency vulnerabilities | Trivy scans locked dependencies. PR dependency review checks newly introduced high or critical findings and the GPL/AGPL denylist. |
 | Container build and image scan | Hadolint checks both Dockerfiles. Build and scan the four application images for fixable high or critical findings. |
 | Coverage gate | Merged JaCoCo line coverage across Java unit and integration tests, with an 85% minimum. |
-| Smoke test | Starts the scanned images and dependencies in the disposable test project. Checks readiness, the dashboard, telemetry recovery, and authenticated trend reads through the API proxy. |
-| Performance test | Runs Gatling against the dashboard and readiness endpoint with 10 users per second for 10 seconds. Requires at least 99% successful requests and p95 of at most 500 ms. Extend the scenarios as ingest, trends and control APIs become available. |
+| Smoke test | Starts the scanned images and dependencies in the disposable test project. Checks readiness, telemetry recovery, and the production React dashboard in headless Chromium through the API proxy. |
+| Performance test | Runs Gatling with five authenticated trend readers during live ingest, plus the dashboard and readiness shell load. Asserts each API resolution meets 500 ms p95 and checks the ingestion p95 against 3 s. |
 | CI gate | Rejects failed, cancelled or unexpectedly skipped stages. PR hygiene only applies to PRs. Docs-only PRs may skip performance. |
 
 The coverage threshold applies once there is measurable application code. The exclusions are the three Spring Boot launcher classes and generated Protobuf classes. A checkout containing other Java classes requires coverage data, and the verification fails below 85%. Test and report artifacts are retained for 14 days. The image archive used by runtime jobs is retained for one day.
 
 The separate `Nightly` workflow rebuilds and rescans the application images at 03:00 IST. Its status is outside the required PR gate. Mutation testing will join the scheduled workflow after critical ingestion and command code is available.
+
+## Trend and ingest performance mix
+
+The performance job provisions a fresh two-tenant stack with 11 streams per metric and tenant (132 one-hertz streams). Three authenticated readers use tenant A and two use tenant B. All five synchronize before each query and repeat the four-query sequence three times with two seconds between requests. The shell scenario retains its 10 users per second for 10 seconds.
+
+| Trends bucket | Aligned window ending at the end of the current bucket (UTC) | Sensors per reader |
+|---|---|---|
+| 15 minutes | 6 hours | 1 |
+| 1 hour | 2 days | 3 |
+| 1 day | 7 days | 6 |
+| 1 week | 28 days, Mondays | 10 |
+
+The gate requires 15 successful responses at each resolution and a p95 of at most 500 ms per resolution. It retains the 99% overall success and 500 ms p95 shell-plus-reader assertions. The backend records newly committed readings after PostgreSQL confirms commit, using the gateway receipt as the start time. The run compares the cumulative metric before and after Gatling. At least 95% of a minimum 132 new observations must be in the 3 s bucket. The trend report and ingest threshold evidence are uploaded from `perf/build/reports/gatling/` and `build/ci/performance-ingest.txt`. The short CI run has a warm, newly provisioned dataset. Repeat this query mix on the retained soak dataset to compare day-15 latency.
+
+The browser smoke job verifies sign-in, tenant isolation with overlapping IDs in two tabs, sensor and metric filters, UTC ranges, stale and gap states, and automatic refresh after a transient failure. The live test also verifies visible fresh trends in the scanned Compose images. The JUnit report is written to `build/ci/browser.xml`.
 
 ## Repository protection and updates
 
@@ -40,8 +55,10 @@ npm --prefix frontend run lint
 npm exec --yes --package=@redocly/cli@2.82.0 -- redocly lint --extends=spec contracts/openapi/browser-v1.yaml
 npm --prefix frontend test
 npm --prefix frontend run build
-./scripts/stack.sh test up
+(cd frontend && npm exec -- playwright install --only-shell chromium)
+IOT_STACK_SIM_STREAMS_PER_TYPE=11 ./scripts/stack.sh test up
 bash scripts/ci/smoke.sh
-./gradlew :perf:gatlingRun
+bash scripts/ci/browser.sh
+bash scripts/ci/performance.sh
 ./scripts/stack.sh test reset
 ```

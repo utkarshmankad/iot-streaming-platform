@@ -304,12 +304,15 @@ jobs:
             ./scripts/stack.sh test reset
             exit "$log_status"
           fi
+      - name: Verify telemetry fault recovery
+        run: python3 scripts/ci/telemetry-faults.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: smoke
           path: |
             build/ci/compose.log
+            build/ci/faults/
           if-no-files-found: ignore
           retention-days: 14
 

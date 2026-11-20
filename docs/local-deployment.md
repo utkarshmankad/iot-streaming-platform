@@ -65,3 +65,14 @@ curl --fail http://127.0.0.1:18080/healthz
 ```
 
 The final command removes the test project's disposable volumes. For test logs, use `docker compose --env-file .env.test --project-name iot-platform-ci --profile test logs --tail 100`.
+
+## Run the short telemetry fault suite
+
+Run this from the repository root after building the test images:
+
+```sh
+./scripts/stack.sh test build
+python3 scripts/ci/telemetry-faults.py
+```
+
+The runner uses a fresh Compose project and deletes its own containers and volumes on exit. It uses the seeded two-tenant fixture and the dedicated `compose.fault.yaml` overlay. The short suite verifies lost MQTT application receipts, simulator silence, fresh broker sessions, gateway and database/backend restarts, binary schema validation, and cross-tenant MQTT publish and delivery denial. It records each generated identity and checks the drained TimescaleDB readings and receipt ledger. The CI smoke job runs the same command and uploads the manifest, case logs and terminal-event list from `build/ci/faults/`.

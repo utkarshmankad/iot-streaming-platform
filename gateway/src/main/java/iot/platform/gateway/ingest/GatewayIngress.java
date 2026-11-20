@@ -23,11 +23,14 @@ final class GatewayIngress {
   private final RegistryCache registry;
   private final GatewayMqtt mqtt;
   private final IngressRegistry assignments = new IngressRegistry();
+  private final ReceiptFault receiptFault;
 
-  GatewayIngress(GatewaySpool spool, RegistryCache registry, GatewayMqtt mqtt) {
+  GatewayIngress(
+      GatewaySpool spool, RegistryCache registry, GatewayMqtt mqtt, boolean injectFault) {
     this.spool = spool;
     this.registry = registry;
     this.mqtt = mqtt;
+    receiptFault = injectFault ? new ReceiptFault() : null;
   }
 
   void tick(long now) throws SQLException {
@@ -130,15 +133,44 @@ final class GatewayIngress {
       ByteString hash,
       TelemetryReceipt.Outcome outcome,
       String reason) {
-    mqtt.receipt(
-        topic,
+    var receipt =
         TelemetryReceipt.newBuilder()
             .setSchemaVersion(TelemetryValidation.VERSION)
             .setEventId(event)
             .setFingerprint(hash)
             .setOutcome(outcome)
             .setReasonCode(reason)
-            .build());
+            .build();
+    if (receiptFault == null || receiptFault.mayPublish(topic, receipt)) {
+      mqtt.receipt(topic, receipt);
+    }
+  }
+
+  /** Enabled only in the disposable, explicitly activated fault-test profile. */
+  private static final class ReceiptFault {
+    private TelemetryReceipt withheld;
+    private String withheldTopic;
+    private boolean replaySeen;
+
+    boolean mayPublish(String topic, TelemetryReceipt receipt) {
+      if (withheld == null && receipt.getOutcome() == TelemetryReceipt.Outcome.ACCEPTED) {
+        withheld = receipt;
+        withheldTopic = topic;
+        LOG.info("Fault fixture withheld application receipt {} {}", topic, receipt.getEventId());
+        return false;
+      }
+      if (withheld != null
+          && !replaySeen
+          && topic.equals(withheldTopic)
+          && receipt.getEventId().equals(withheld.getEventId())
+          && receipt.getFingerprint().equals(withheld.getFingerprint())
+          && (receipt.getOutcome() == TelemetryReceipt.Outcome.ACCEPTED
+              || receipt.getOutcome() == TelemetryReceipt.Outcome.DUPLICATE)) {
+        replaySeen = true;
+        LOG.info("Fault fixture observed unchanged replay {} {}", topic, receipt.getEventId());
+      }
+      return true;
+    }
   }
 
   private static ByteString fingerprint(byte[] bytes) {

@@ -6,6 +6,7 @@ import io.micrometer.core.instrument.MeterRegistry;
 import iot.platform.telemetry.TelemetryValidation;
 import iot.platform.telemetry.proto.TelemetryHeartbeat;
 import jakarta.annotation.PreDestroy;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Clock;
@@ -21,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.EnableScheduling;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -39,6 +41,7 @@ final class Simulation {
   private final Map<UUID, AtomicReference<SimulatorOutbox.Stats>> statistics =
       new LinkedHashMap<>();
   private final long seed;
+  private final Path faultSilence;
   private long previousTick;
   private long nextMetrics;
 
@@ -50,12 +53,15 @@ final class Simulation {
       @Value("${IOT_SIM_DEVICE_B_PASSWORD:}") String deviceB,
       @Value("${IOT_SIM_SEED:20260301}") long seed,
       @Value("${IOT_SIM_MAX_BYTES_PER_TENANT:5000000000}") long maximumBytes,
-      MeterRegistry meters)
+      MeterRegistry meters,
+      Environment environment)
       throws Exception {
     this.seed = seed;
     streams = SensorStream.read(assignments);
     var passwords = Map.of("device-a", deviceA, "device-b", deviceB);
-    outbox = SimulatorOutbox.open(database, maximumBytes);
+    boolean faultTest = environment.matchesProfiles("fault-test");
+    faultSilence = faultTest ? database.resolveSibling("fault-silence") : null;
+    outbox = SimulatorOutbox.open(database, maximumBytes, faultTest);
     try {
       for (var entry :
           streams.stream().collect(Collectors.groupingBy(SensorStream::device)).entrySet()) {
@@ -77,15 +83,17 @@ final class Simulation {
   @Scheduled(fixedDelay = 50)
   synchronized void tick() throws SQLException {
     long now = clock.millis();
-    var events = new ArrayList<SimulatorOutbox.Intent>();
-    for (var stream : streams) {
-      long observed = stream.observationSlot(now);
-      if (observed > previousTick) {
-        events.add(new SimulatorOutbox.Intent(stream, observed));
+    if (faultSilence == null || !Files.exists(faultSilence)) {
+      var events = new ArrayList<SimulatorOutbox.Intent>();
+      for (var stream : streams) {
+        long observed = stream.observationSlot(now);
+        if (observed > previousTick) {
+          events.add(new SimulatorOutbox.Intent(stream, observed));
+        }
       }
-    }
-    if (!events.isEmpty()) {
-      outbox.generate(events, seed);
+      if (!events.isEmpty()) {
+        outbox.generate(events, seed);
+      }
     }
     for (var session : sessions.values()) {
       session.flush(outbox, now);

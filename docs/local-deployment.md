@@ -12,20 +12,26 @@ Open the dashboard at `http://127.0.0.1:8080`. Change the published loopback por
 
 The stack script writes generated database, broker and gateway credentials to an ignored, owner-only `.env.stack`. It adds missing registry credentials to existing files without replacing their database or broker probe passwords. Keep this file with the local deployment data volume because PostgreSQL reads the initialization password on first startup.
 
-Two one-shot Compose jobs create the separate database roles and run the Flyway registry migrations. The demo provisioner registers two tenants with overlapping sensor IDs and produces an MQTT ACL from their active assignments. Repeated provisioning preserves existing registry rows and status changes. The backend uses the restricted runtime role and the broker loads separate credentials and topic rules for the two gateways and two devices.
+Two one-shot Compose jobs create the separate database roles and run the Flyway registry migrations. The demo provisioner registers two tenants with overlapping sensor IDs and produces an MQTT ACL and a simulator assignment file from their active assignments. Repeated provisioning preserves existing registry rows and status changes. The backend uses the restricted runtime role and the broker loads separate credentials and topic rules for the two gateways and two devices.
 
-To refresh the ACL after local registry changes, run the provisioner again and recreate the broker so it reads the new ACL and active principal list.
+To refresh the projections after local registry changes, run the provisioner again and recreate the broker and simulator so both load the new assignments.
 
 ```sh
 docker compose --env-file .env.stack --profile local run --rm registry-provision
-docker compose --env-file .env.stack --profile local up -d --no-deps --force-recreate mosquitto
+docker compose --env-file .env.stack --profile local up -d --no-deps --force-recreate mosquitto simulator
 ```
 
 The gateway refreshes both authorized snapshots from the backend every 30 seconds. It verifies each response's digest and assigned tenant and gateway before replacing its persistent cache. A failed refresh keeps the verified snapshot available during network loss. An explicit authentication rejection invalidates that tenant's cache.
 
+## Configure simulated streams
+
+The demo starts one stream per sensor type in each tenant, at one reading per second. Increase `IOT_STACK_SIM_STREAMS_PER_TYPE` to register more streams per type and tenant. Existing registrations are preserved on reprovisioning. Use a separate test dataset to try a lower count. Set `IOT_STACK_SIM_SEED` to reproduce a reading sequence for the same assignment and sample times. Set `IOT_STACK_SIM_MAX_BYTES_PER_TENANT` to adjust the pending Protobuf payload budget, which defaults to five decimal GB per tenant. Account for SQLite overhead and WAL when sizing Docker storage.
+
+The simulator publishes binary telemetry and heartbeats to the private broker. It keeps unacknowledged events across restarts and republishes the same bytes after a receipt timeout. Until the gateway spool arrives in M1.3, pending events will accumulate on the simulator volume.
+
 ## Check services and restart offline
 
-Compose waits for service health before reporting startup complete. Logs rotate at 20 MB with up to five files per container. Java readiness probes and metrics stay on the Docker networks. Nginx serves the dashboard and forwards `/api/` to the Java backend. The backend serves health and metrics and has an authenticated internal registry endpoint. Browser APIs and telemetry clients arrive in later milestones.
+Compose waits for service health before reporting startup complete. Logs rotate at 20 MB with up to five files per container. Java readiness probes and metrics stay on the Docker networks. Nginx serves the dashboard and forwards `/api/` to the Java backend. The backend serves health and metrics and has an authenticated internal registry endpoint. Browser APIs and the gateway telemetry subscriber arrive in later milestones.
 
 ```sh
 docker compose --env-file .env.stack --profile local logs --tail 100
@@ -33,7 +39,7 @@ docker compose --env-file .env.stack --profile local logs --tail 100
 ./scripts/stack.sh local status
 ```
 
-`offline-up` recreates containers from images already present and forbids building or pulling. The service networks are internal. The dashboard is the sole published endpoint and uses a separate loopback ingress bridge with outbound masquerading disabled. The local project retains database, MQTT, queue and monitoring volumes when containers are recreated. The gateway, simulator and alarm volumes reserve storage for later milestones. Alertmanager has an internal webhook target. The scaffold reports unavailable for webhook deliveries until the durable receiver lands.
+`offline-up` recreates containers from images already present and forbids building or pulling. The service networks are internal. The dashboard is the sole published endpoint and uses a separate loopback ingress bridge with outbound masquerading disabled. The local project retains database, MQTT, queue and monitoring volumes when containers are recreated. The simulator volume stores its SQLite outbox and sequence checkpoints. The alarm volume reserves storage for a later milestone. Alertmanager has an internal webhook target. The scaffold reports unavailable for webhook deliveries until the durable receiver lands.
 
 ## Stop, reset or run the test project
 

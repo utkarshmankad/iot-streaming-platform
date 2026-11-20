@@ -1,5 +1,5 @@
 <FindBugsFilter>
     <Match>
-        <Class name="~iot\.platform\.registry\.proto\..*" />
+        <Class name="~iot\.platform\.(registry|telemetry)\.proto\..*" />
     </Match>
 </FindBugsFilter>

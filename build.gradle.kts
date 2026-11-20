@@ -19,14 +19,19 @@ plugins {
     id("org.springframework.boot") version "4.1.2" apply false
 }
 
-val services = listOf(project(":backend"), project(":gateway"), project(":simulator"))
+val services = listOf(project(":backend"), project(":gateway"), project(":simulator"), project(":contracts"))
 
 configure(services) {
     apply(plugin = "java")
     apply(plugin = "jacoco")
     apply(plugin = "com.github.spotbugs")
     apply(plugin = "com.diffplug.spotless")
-    apply(plugin = "org.springframework.boot")
+    val contractLibrary = name == "contracts"
+    if (contractLibrary) {
+        apply(plugin = "java-library")
+    } else {
+        apply(plugin = "org.springframework.boot")
+    }
 
     repositories {
         mavenCentral()
@@ -55,8 +60,7 @@ configure(services) {
 
     val sourceSets = extensions.getByType<SourceSetContainer>()
     val mainSource = sourceSets.named("main").get()
-    val registryService = name == "backend" || name == "gateway"
-    if (registryService) {
+    if (contractLibrary) {
         apply(plugin = "com.google.protobuf")
         extensions.configure<ProtobufExtension> {
             protoc { artifact = "com.google.protobuf:protoc:4.36.2" }
@@ -89,8 +93,10 @@ configure(services) {
         shouldRunAfter(tasks.named("test"))
     }
 
-    tasks.named<BootJar>("bootJar") {
-        archiveFileName.set("application.jar")
+    if (!contractLibrary) {
+        tasks.named<BootJar>("bootJar") {
+            archiveFileName.set("application.jar")
+        }
     }
 
     dependencyLocking {
@@ -99,14 +105,21 @@ configure(services) {
 
     dependencies {
         add("implementation", platform("org.springframework.boot:spring-boot-dependencies:4.1.2"))
-        add("implementation", "org.springframework.boot:spring-boot-starter-webmvc")
-        add("implementation", "org.springframework.boot:spring-boot-starter-actuator")
-        add("runtimeOnly", "io.micrometer:micrometer-registry-prometheus")
+        if (contractLibrary) {
+            add("api", "com.google.protobuf:protobuf-java:4.36.2")
+        } else {
+            add("implementation", project(":contracts"))
+            add("implementation", "org.springframework.boot:spring-boot-starter-webmvc")
+            add("implementation", "org.springframework.boot:spring-boot-starter-actuator")
+            add("runtimeOnly", "io.micrometer:micrometer-registry-prometheus")
+        }
         add("testImplementation", "org.junit.jupiter:junit-jupiter")
         add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher")
         add("spotbugsPlugins", "com.h3xstream.findsecbugs:findsecbugs-plugin:1.14.0")
-        if (registryService) {
-            add("implementation", "com.google.protobuf:protobuf-java:4.36.2")
+        if (name == "simulator") {
+            add("implementation", "org.xerial:sqlite-jdbc:3.54.1.0")
+            add("implementation", "org.eclipse.paho:org.eclipse.paho.mqttv5.client:1.2.5")
+            add("integrationTestImplementation", "org.testcontainers:testcontainers")
         }
         if (name == "backend") {
             add("implementation", "org.springframework.boot:spring-boot-starter-jdbc")
@@ -133,6 +146,7 @@ val coverageClasses = files(services.map { service ->
             // These three main methods only delegate startup to Spring Boot.
             exclude(
                 "iot/platform/registry/proto/**",
+                "iot/platform/telemetry/proto/**",
                 "iot/platform/backend/BackendApplication.class",
                 "iot/platform/gateway/GatewayApplication.class",
                 "iot/platform/simulator/SimulatorApplication.class",

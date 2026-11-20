@@ -27,17 +27,23 @@ final class DemoRegistryProvisioner implements ApplicationRunner {
   private final String tokenA;
   private final String tokenB;
   private final Path acl;
+  private final int streamsPerType;
 
   DemoRegistryProvisioner(
       JdbcTemplate jdbc,
       TransactionTemplate transaction,
       @Value("${IOT_REGISTRY_GATEWAY_A_TOKEN}") String tokenA,
       @Value("${IOT_REGISTRY_GATEWAY_B_TOKEN}") String tokenB,
-      @Value("${IOT_REGISTRY_ACL:/var/lib/iot/registry.acl}") Path acl) {
+      @Value("${IOT_REGISTRY_ACL:/var/lib/iot/registry.acl}") Path acl,
+      @Value("${IOT_REGISTRY_STREAMS_PER_TYPE:1}") int streamsPerType) {
     if (!GatewayToken.valid(tokenA) || !GatewayToken.valid(tokenB) || tokenA.equals(tokenB)) {
       throw new IllegalArgumentException(
           "Distinct generated registry gateway credentials are required");
     }
+    if (streamsPerType < 1 || streamsPerType > 1000) {
+      throw new IllegalArgumentException("Demo stream count per type must be between 1 and 1000");
+    }
+    this.streamsPerType = streamsPerType;
     this.jdbc = jdbc;
     this.transaction = transaction;
     this.tokenA = tokenA;
@@ -47,19 +53,24 @@ final class DemoRegistryProvisioner implements ApplicationRunner {
 
   @Override
   public void run(ApplicationArguments ignored) throws Exception {
-    String projection = Objects.requireNonNull(transaction.execute(status -> provision()));
-    Path file = acl.toAbsolutePath();
+    var projection = Objects.requireNonNull(transaction.execute(status -> provision()));
+    Path target = acl.toAbsolutePath();
+    writeProjection(target.resolveSibling("simulator.tsv"), projection.assignments());
+    writeProjection(target, projection.acl());
+  }
+
+  private void writeProjection(Path file, String contents) throws Exception {
     Path parent = Objects.requireNonNull(file.getParent());
     Files.createDirectories(parent);
-    // The provisioner and broker share only the ACL file group.
+    // The provisioner shares read access to the local MQTT projections.
     Path pending =
         Files.createTempFile(
             parent,
-            "registry-acl-",
+            "registry-projection-",
             ".tmp",
             PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-r-----")));
     try {
-      Files.writeString(pending, projection);
+      Files.writeString(pending, contents);
       Files.move(
           pending, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     } finally {
@@ -67,7 +78,11 @@ final class DemoRegistryProvisioner implements ApplicationRunner {
     }
   }
 
-  private String provision() {
+  private Projection provision() {
+    jdbc.queryForObject(
+        "SELECT set_config('iot.demo_streams_per_type', ?, true)",
+        String.class,
+        Integer.toString(streamsPerType));
     jdbc.execute(
         (ConnectionCallback<Void>)
             connection -> {
@@ -77,7 +92,7 @@ final class DemoRegistryProvisioner implements ApplicationRunner {
             });
     storeToken("gateway-a", tokenA);
     storeToken("gateway-b", tokenB);
-    return brokerAcl();
+    return projectAssignments();
   }
 
   private void storeToken(String principal, String token) {
@@ -91,12 +106,14 @@ final class DemoRegistryProvisioner implements ApplicationRunner {
         principal);
   }
 
-  private String brokerAcl() {
+  private Projection projectAssignments() {
+    var assignments = new StringBuilder();
     var principals = new TreeMap<String, List<String>>();
     principals.put("scaffold_health", List.of("topic read iot/scaffold/health"));
     jdbc.query(
         """
-        SELECT g.tenant_id, g.credential_ref, d.device_id, d.mqtt_principal_ref, s.sensor_id
+        SELECT g.tenant_id, g.credential_ref, d.device_id, d.mqtt_principal_ref,
+          d.broker_client_id, s.sensor_id, s.type_code, s.sampling_period_ms
         FROM registry.gateways g
         JOIN registry.tenants t USING (tenant_id)
         JOIN registry.devices d ON d.tenant_id = g.tenant_id AND d.gateway_id = g.gateway_id
@@ -119,6 +136,21 @@ final class DemoRegistryProvisioner implements ApplicationRunner {
           var device =
               principals.computeIfAbsent(
                   row.getString("mqtt_principal_ref"), key -> new ArrayList<>());
+          String principal = row.getString("mqtt_principal_ref");
+          if (principal.equals("device-a") || principal.equals("device-b")) {
+            assignments
+                .append(
+                    String.join(
+                        "\t",
+                        row.getString("tenant_id"),
+                        row.getString("device_id"),
+                        row.getString("broker_client_id"),
+                        principal,
+                        row.getString("sensor_id"),
+                        row.getString("type_code"),
+                        row.getString("sampling_period_ms")))
+                .append('\n');
+          }
           for (String kind : List.of("telemetry", "heartbeat", "command-ack")) {
             gateway.add("topic read " + root + kind);
             device.add("topic write " + root + kind);
@@ -135,6 +167,8 @@ final class DemoRegistryProvisioner implements ApplicationRunner {
           rules.forEach(rule -> text.append(rule).append('\n'));
           text.append('\n');
         });
-    return text.toString();
+    return new Projection(text.toString(), assignments.toString());
   }
+
+  private record Projection(String acl, String assignments) {}
 }

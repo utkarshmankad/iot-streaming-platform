@@ -57,6 +57,15 @@ class RegistryIntegrationTest {
           assertEquals(12, counts.getInt(1));
           assertEquals(6, counts.getInt(2));
         }
+        var assignments = Files.readAllLines(directory.resolve("simulator.tsv"));
+        assertEquals(12, assignments.size());
+        assertTrue(
+            assignments.stream()
+                .anyMatch(
+                    row -> row.startsWith(TENANT_A + "\t") && row.endsWith("\toxygen\t1000")));
+        assertTrue(
+            assignments.stream()
+                .anyMatch(row -> row.startsWith(TENANT_B + "\t") && row.endsWith("\tlight\t1000")));
         String text = Files.readString(acl);
         String aRules =
             text.substring(text.indexOf("user device-a"), text.indexOf("user device-b"));

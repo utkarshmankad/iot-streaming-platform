@@ -1,3 +1,3 @@
 rootProject.name = "iot-streaming-platform"
 
-include("backend", "gateway", "simulator", "perf")
+include("backend", "gateway", "simulator", "contracts", "perf")

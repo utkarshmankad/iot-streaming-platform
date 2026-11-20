@@ -13,7 +13,7 @@ import org.springframework.boot.gradle.tasks.bundling.BootJar
 
 plugins {
     jacoco
-    id("com.google.protobuf") version "0.10.0" apply false
+    id("com.google.protobuf") version "0.10.1" apply false
     id("com.github.spotbugs") version "6.5.13" apply false
     id("com.diffplug.spotless") version "8.11.0" apply false
     id("org.springframework.boot") version "4.1.2" apply false

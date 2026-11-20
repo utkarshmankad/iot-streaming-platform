@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -129,6 +130,13 @@ class TelemetryStore {
 
   void insert(UUID tenant, List<Reading> readings, long backendReceivedMs) {
     OffsetDateTime backendReceived = utc(backendReceivedMs);
+    // Take repair bucket locks in a consistent order across concurrent ingest batches.
+    var ordered =
+        readings.stream()
+            .sorted(
+                Comparator.comparing((Reading reading) -> reading.key().sensor())
+                    .thenComparingLong(Reading::observedMs))
+            .toList();
     writer.batchUpdate(
         """
         INSERT INTO telemetry.readings
@@ -136,7 +144,7 @@ class TelemetryStore {
            backend_received_at, schema_version, value, payload_bytes)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        readings,
+        ordered,
         250,
         (sql, reading) -> {
           sql.setObject(1, tenant);

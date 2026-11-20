@@ -20,6 +20,10 @@ source_db() {
   docker compose --env-file .env.test --profile test -p iot-platform-ci exec -T timescaledb \
     psql -XqAt -U iot -d iot -v ON_ERROR_STOP=1 -c "$1"
 }
+archive_move() {
+  docker compose --env-file .env.test --profile test -p iot-platform-ci exec -T --user 0:0 timescaledb \
+    mv "/archive/$system_id/$1" "/archive/$system_id/$2"
+}
 restore_stack() {
   IOT_HTTP_PORT=$restore_port IOT_RESTORE_WAL="$target/wal/$system_id" \
     docker compose --env-file "$target/$backup_id/stack.env" --profile test -p "$project" \
@@ -35,6 +39,12 @@ cleanup() {
   fi
   ./scripts/stack.sh test reset || true
   rm -f .env.backup-test
+  if [[ -d "$target/wal" ]]; then
+    # The PostgreSQL UID owns the archive subdirectories on Linux.
+    docker run --rm --pull never --network none --user 0:0 --entrypoint /bin/sh \
+      --mount "type=bind,src=$target/wal,dst=/archive" timescale/timescaledb:2.27.0-pg17 \
+      -ec 'find /archive -type d -exec chmod a+w {} +' || true
+  fi
   rm -rf "$target"
 }
 trap cleanup EXIT
@@ -102,13 +112,12 @@ cp "$report" build/ci/recovery.json
 
 # Missing checkpoint WAL must fail checksum verification before recovery starts.
 checkpoint_wal=$(jq -er .checkpoint_wal.name "$target/$backup_id/manifest.json")
-archive_file="$target/wal/$system_id/$checkpoint_wal"
-mv "$archive_file" "$archive_file.fixture"
+archive_move "$checkpoint_wal" "$checkpoint_wal.fixture"
 if python3 scripts/recovery.py test verify "$backup_id"; then
   printf '%s\n' 'Expected verification to reject the incomplete archive.' >&2
   exit 1
 fi
-mv "$archive_file.fixture" "$archive_file"
+archive_move "$checkpoint_wal.fixture" "$checkpoint_wal"
 
 # A modified SQLite snapshot must fail verification before it can be restored.
 printf 'damage' >> "$target/$backup_id/gateway.sqlite"

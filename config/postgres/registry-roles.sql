@@ -6,3 +6,5 @@ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'iot_app') \gexec
 ALTER ROLE iot_migrate PASSWORD :'migrate_password';
 ALTER ROLE iot_app PASSWORD :'app_password';
 CREATE SCHEMA IF NOT EXISTS registry AUTHORIZATION iot_migrate;
+CREATE SCHEMA IF NOT EXISTS telemetry AUTHORIZATION iot_migrate;
+CREATE EXTENSION IF NOT EXISTS timescaledb WITH SCHEMA public;

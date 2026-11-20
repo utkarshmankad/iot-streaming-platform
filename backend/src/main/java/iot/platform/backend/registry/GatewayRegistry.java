@@ -6,7 +6,6 @@ import iot.platform.registry.proto.RegistrySensor;
 import iot.platform.registry.proto.RegistrySnapshot;
 import java.util.LinkedHashMap;
 import java.util.Optional;
-import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
@@ -16,49 +15,19 @@ import org.springframework.transaction.annotation.Transactional;
 @Profile("registry")
 class GatewayRegistry {
   private final JdbcClient jdbc;
-  private final TenantScope scope;
+  private final GatewayAccess access;
 
-  GatewayRegistry(JdbcClient jdbc, TenantScope scope) {
+  GatewayRegistry(JdbcClient jdbc, GatewayAccess access) {
     this.jdbc = jdbc;
-    this.scope = scope;
+    this.access = access;
   }
 
   @Transactional(readOnly = true)
   public Optional<RegistrySnapshot> snapshot(String token) {
-    if (!GatewayToken.valid(token)) {
-      return Optional.empty();
-    }
-    return jdbc.sql(
-            """
-        SELECT tenant_id, gateway_id FROM registry.gateway_credentials WHERE token_digest = ?
-        """)
-        .param(GatewayToken.digest(token))
-        .query(
-            (row, number) ->
-                new Assignment(
-                    row.getObject("tenant_id", UUID.class),
-                    row.getObject("gateway_id", UUID.class)))
-        .optional()
-        .flatMap(this::activeSnapshot);
+    return access.authorize(token).map(this::loadSnapshot);
   }
 
-  private Optional<RegistrySnapshot> activeSnapshot(Assignment assignment) {
-    scope.bind(assignment.tenant());
-    boolean active =
-        jdbc.sql(
-                """
-        SELECT EXISTS (
-          SELECT FROM registry.gateways g JOIN registry.tenants t USING (tenant_id)
-          WHERE g.tenant_id = ? AND g.gateway_id = ? AND g.status = 'active' AND t.status = 'active'
-        )
-        """)
-            .params(assignment.tenant(), assignment.gateway())
-            .query(Boolean.class)
-            .single();
-    return active ? Optional.of(loadSnapshot(assignment)) : Optional.empty();
-  }
-
-  private RegistrySnapshot loadSnapshot(Assignment assignment) {
+  private RegistrySnapshot loadSnapshot(GatewayAccess.Assignment assignment) {
     var snapshot =
         RegistrySnapshot.newBuilder()
             .setFormatVersion(1)
@@ -123,6 +92,4 @@ class GatewayRegistry {
             });
     return snapshot.build();
   }
-
-  private record Assignment(UUID tenant, UUID gateway) {}
 }

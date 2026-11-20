@@ -12,7 +12,7 @@ Open the dashboard at `http://127.0.0.1:8080`. Change the published loopback por
 
 The stack script writes generated database, broker and gateway credentials to an ignored, owner-only `.env.stack`. It adds missing registry credentials to existing files without replacing their database or broker probe passwords. Keep this file with the local deployment data volume because PostgreSQL reads the initialization password on first startup.
 
-Two one-shot Compose jobs create the separate database roles and run the Flyway registry migrations. The demo provisioner registers two tenants with overlapping sensor IDs and produces an MQTT ACL and a simulator assignment file from their active assignments. Repeated provisioning preserves existing registry rows and status changes. The backend uses the restricted runtime role and the broker loads separate credentials and topic rules for the two gateways and two devices.
+Two one-shot Compose jobs create the database roles and schemas, enable TimescaleDB and run Flyway migrations. The demo provisioner registers two tenants with overlapping sensor IDs and produces an MQTT ACL and a simulator assignment file from their active assignments. Repeated provisioning preserves existing registry rows and status changes. The backend uses the restricted runtime role and the broker loads separate credentials and topic rules for the two gateways and two devices.
 
 To refresh the projections after local registry changes, run the provisioner again and recreate the broker and simulator so both load the new assignments.
 
@@ -33,7 +33,7 @@ The simulator publishes binary telemetry and heartbeats to the private broker. I
 
 The edge gateway stores original readings in `gateway.sqlite` on its named volume. Set `IOT_STACK_GATEWAY_MAX_BYTES_PER_TENANT` to change the pending payload budget from five decimal GB per tenant. Reserve additional disk space for SQLite tables, indexes and WAL. The gateway exposes per-tenant queue bytes, capacity, oldest age and admission outcomes through its internal Prometheus endpoint.
 
-The gateway uploads a tenant’s queue at 250 readings or when an eligible reading has waited a second. It preserves unconfirmed rows across backend outages and restarts, and it can resume with a verified cached registry while the backend is unreachable. The demo backend will begin committing these batches in M1.4. Until then the gateway retains accepted readings and retries delivery with backoff.
+The gateway uploads a tenant’s queue at 250 readings or when an eligible reading has waited a second. It preserves unconfirmed rows across backend outages and restarts, and it can resume with a verified cached registry while the backend is unreachable. The Java backend validates each entry and commits valid readings and their unique receipt identities in TimescaleDB. The gateway keeps a batch entry until it receives a matching terminal outcome.
 
 ## Check services and restart offline
 

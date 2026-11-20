@@ -5,7 +5,7 @@ for file in gradlew build.gradle.kts gradle/wrapper/gradle-wrapper.jar \
   backend/gradle.lockfile gateway/gradle.lockfile simulator/gradle.lockfile contracts/gradle.lockfile \
   frontend/package.json frontend/package-lock.json frontend/eslint.config.mjs \
   Dockerfile frontend/Dockerfile compose.yaml scripts/stack.sh \
-  perf/build.gradle.kts perf/gradle.lockfile; do
+  contracts/openapi/browser-v1.yaml perf/build.gradle.kts perf/gradle.lockfile; do
   test -s "$file" || { printf 'Required CI input missing: %s\n' "$file" >&2; exit 1; }
 done
 test -n "$(git ls-files perf/src/gatling/java)"

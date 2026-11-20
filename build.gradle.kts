@@ -122,6 +122,7 @@ configure(services) {
             add("integrationTestImplementation", "org.testcontainers:testcontainers")
         }
         if (name == "backend") {
+            add("implementation", "org.springframework.boot:spring-boot-starter-security")
             add("implementation", "org.springframework.boot:spring-boot-starter-jdbc")
             add("implementation", "org.springframework.boot:spring-boot-starter-flyway")
             add("runtimeOnly", "org.flywaydb:flyway-database-postgresql")

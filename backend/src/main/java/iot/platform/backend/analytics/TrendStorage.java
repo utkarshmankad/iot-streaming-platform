@@ -101,6 +101,14 @@ public class TrendStorage {
       this.duration = duration;
     }
 
+    public Instant endOf(Instant timestamp) {
+      long seconds = duration.getSeconds();
+      long lower =
+          timestamp.getEpochSecond()
+              - Math.floorMod(timestamp.getEpochSecond() - UTC_MONDAY_ORIGIN, seconds);
+      return Instant.ofEpochSecond(lower + seconds);
+    }
+
     public boolean isAligned(Instant timestamp) {
       return timestamp.getNano() == 0
           && Math.floorMod(timestamp.getEpochSecond() - UTC_MONDAY_ORIGIN, duration.getSeconds())

@@ -55,6 +55,8 @@ services:
       SPRING_PROFILES_ACTIVE: registry
       IOT_REGISTRY_JDBC_URL: jdbc:postgresql://timescaledb:5432/iot
       IOT_REGISTRY_APP_PASSWORD: ${IOT_STACK_APP_PASSWORD:-}
+      IOT_OPERATOR_A_PASSWORD: ${IOT_STACK_OPERATOR_A_PASSWORD:-}
+      IOT_OPERATOR_B_PASSWORD: ${IOT_STACK_OPERATOR_B_PASSWORD:-}
     networks: [dashboard, gateway-api, database]
     depends_on:
       registry-provision:

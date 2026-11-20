@@ -170,6 +170,10 @@ paths:
           in: header
           required: true
           schema: {type: string, minLength: 1, maxLength: 128, pattern: '^[!-~]+$'}
+        - name: X-IoT-Tenant
+          in: header
+          description: Expected active tenant for this browser action. The session remains authoritative.
+          schema: {$ref: '#/components/schemas/Id'}
       requestBody:
         required: true
         content:
@@ -194,7 +198,7 @@ paths:
         '403': {$ref: '#/components/responses/Forbidden'}
         '404': {$ref: '#/components/responses/Missing'}
         '409':
-          description: IDEMPOTENCY_CONFLICT when the key is reused with a different desired state.
+          description: IDEMPOTENCY_CONFLICT for a different desired state under the same key, or SESSION_CHANGED if the expected tenant differs from the active session.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Problem'}
@@ -314,7 +318,7 @@ components:
         nextCursor: {type: [string, 'null']}
     Sensor:
       type: object
-      required: [sensorId, displayName, type, unit, samplingPeriodMs, desiredEnabled, confirmedEnabled, connectivity, sampleStatus, lastObservedAt, lastHeartbeatAt]
+      required: [sensorId, displayName, type, unit, samplingPeriodMs, desiredEnabled, confirmedEnabled, connectivity, sampleStatus, lastObservedAt, lastHeartbeatAt, latestCommand]
       properties:
         sensorId: {$ref: '#/components/schemas/Id'}
         displayName: {type: string}
@@ -327,6 +331,18 @@ components:
         sampleStatus: {type: string, enum: [fresh, stale, paused, unknown]}
         lastObservedAt: {$ref: '#/components/schemas/NullableTimestamp'}
         lastHeartbeatAt: {$ref: '#/components/schemas/NullableTimestamp'}
+        latestCommand:
+          oneOf:
+            - $ref: '#/components/schemas/CommandSummary'
+            - type: 'null'
+    CommandSummary:
+      type: object
+      required: [commandId, version, requestedEnabled, status]
+      properties:
+        commandId: {$ref: '#/components/schemas/Id'}
+        version: {type: integer, format: int64, minimum: 1}
+        requestedEnabled: {type: boolean}
+        status: {type: string, enum: [pending, applied, failed, expired, superseded]}
     TrendResult:
       type: object
       required: [from, to, bucket, generatedAt, series]

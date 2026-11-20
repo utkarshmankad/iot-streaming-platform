@@ -64,3 +64,12 @@ message TelemetryBatchResult {
   Outcome outcome = 2;
   string reason_code = 3;
 }
+
+message SensorHeartbeatObservation {
+  string device_id = 1;
+  TelemetryHeartbeat heartbeat = 2;
+}
+
+message SensorHeartbeatBatch {
+  repeated SensorHeartbeatObservation observations = 1;
+}

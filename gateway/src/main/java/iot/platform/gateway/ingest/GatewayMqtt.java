@@ -17,10 +17,12 @@ import org.eclipse.paho.mqttv5.common.MqttMessage;
 import org.eclipse.paho.mqttv5.common.packet.MqttProperties;
 
 final class GatewayMqtt implements AutoCloseable {
+  private static final int[] QOS = {1, 1, 0};
   private final MqttAsyncClient client;
   private final MqttConnectionOptions options = new MqttConnectionOptions();
   private final ArrayBlockingQueue<Incoming> messages = new ArrayBlockingQueue<>(2048);
   private final ArrayBlockingQueue<Incoming> control = new ArrayBlockingQueue<>(256);
+  private final ArrayBlockingQueue<Incoming> heartbeats = new ArrayBlockingQueue<>(512);
   private final String[] filters;
   private final Counter overflow;
   private IMqttToken connection;
@@ -35,7 +37,7 @@ final class GatewayMqtt implements AutoCloseable {
     }
     this.overflow = overflow;
     String prefix = "iot/v1/" + tenant + "/+/+/";
-    filters = new String[] {prefix + "telemetry", prefix + "command-ack"};
+    filters = new String[] {prefix + "telemetry", prefix + "command-ack", prefix + "heartbeat"};
     options.setUserName(principal);
     options.setPassword(password.getBytes(StandardCharsets.UTF_8));
     options.setCleanStart(true);
@@ -64,10 +66,9 @@ final class GatewayMqtt implements AutoCloseable {
         subscription = null;
         connection = client.connect(options);
       } else if (subscription == null) {
-        subscription = client.subscribe(filters, new int[] {1, 1});
+        subscription = client.subscribe(filters, QOS.clone());
       } else if (subscription.getException() != null
-          || (subscription.isComplete()
-              && Arrays.stream(subscription.getReasonCodes()).anyMatch(code -> code != 1))) {
+          || (subscription.isComplete() && !Arrays.equals(subscription.getReasonCodes(), QOS))) {
         subscription = null;
         retryLater(now);
       } else if (subscription.isComplete()) {
@@ -89,6 +90,10 @@ final class GatewayMqtt implements AutoCloseable {
 
   Incoming commandAck() {
     return control.poll();
+  }
+
+  Incoming heartbeat() {
+    return heartbeats.poll();
   }
 
   void command(String topic, byte[] payload) {
@@ -126,7 +131,16 @@ final class GatewayMqtt implements AutoCloseable {
   private final class Subscriber implements MqttCallback {
     @Override
     public void messageArrived(String topic, MqttMessage message) {
-      if (message.getQos() == 1 && !message.isRetained()) {
+      if (message.isRetained()) {
+        return;
+      }
+      if (topic.endsWith("/heartbeat")) {
+        if (message.getQos() == 0
+            && !heartbeats.offer(
+                new Incoming(topic, message.getPayload(), System.currentTimeMillis()))) {
+          overflow.increment();
+        }
+      } else if (message.getQos() == 1) {
         // Keep acknowledgement traffic from competing for room in the telemetry inbox.
         var queue = topic.endsWith("/command-ack") ? control : messages;
         if (!queue.offer(new Incoming(topic, message.getPayload(), System.currentTimeMillis()))) {

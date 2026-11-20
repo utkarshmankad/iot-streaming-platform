@@ -24,6 +24,19 @@ export interface Sensor {
   sampleStatus: 'fresh' | 'stale' | 'paused' | 'unknown';
   lastObservedAt: string | null;
   lastHeartbeatAt: string | null;
+  latestCommand: CommandSummary | null;
+}
+
+export interface CommandSummary {
+  commandId: string;
+  version: number;
+  requestedEnabled: boolean;
+  status: 'pending' | 'applied' | 'failed' | 'expired' | 'superseded';
+}
+
+export interface CommandStatus extends CommandSummary {
+  confirmedEnabled: boolean | null;
+  reasonCode?: string;
 }
 
 export interface SensorPage {
@@ -175,10 +188,31 @@ export function readTrends(
   return tenantRead<Trends>(tenantId, `/trends?${query}`, signal);
 }
 
-export function pollingInterval(error: Error | null) {
+export function readCommand(tenantId: string, commandId: string, signal: AbortSignal) {
+  return tenantRead<CommandStatus>(tenantId, `/commands/${encodeURIComponent(commandId)}`, signal);
+}
+
+export async function requestCommand(tenantId: string, sensorId: string, enabled: boolean, key: string) {
+  const send = async () => {
+    const csrf = await request<{ headerName: string; token: string }>('/session/csrf');
+    return request<CommandSummary>(`/sensors/${encodeURIComponent(sensorId)}/commands`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': key,
+        'X-IoT-Tenant': tenantId,
+        [csrf.headerName]: csrf.token,
+      },
+      body: JSON.stringify({ enabled }),
+    });
+  };
+  return navigator.locks ? navigator.locks.request(sessionLock, { mode: 'shared' }, send) : send();
+}
+
+export function pollingInterval(error: Error | null, interval = 15_000) {
   if (error instanceof ApiError && (error.status === 401 || error.status === 403 || error.code === 'SESSION_CHANGED')) {
     return false;
   }
   if (error) return Math.max(30_000, error instanceof ApiError ? error.retryAfterMs : 0);
-  return 15_000;
+  return interval;
 }

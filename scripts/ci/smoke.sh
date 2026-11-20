@@ -86,7 +86,8 @@ for attempt in {1..20}; do
 done
 
 cookies="$(mktemp)"
-trap 'rm -f "$cookies"' EXIT
+latency_samples="$(mktemp)"
+trap 'rm -f "$cookies" "$latency_samples"' EXIT
 csrf="$(curl --fail --silent --show-error --cookie-jar "$cookies" "$url/api/v1/session/csrf")"
 csrf_header="$(jq -er .headerName <<< "$csrf")"
 csrf_token="$(jq -er .token <<< "$csrf")"
@@ -131,16 +132,32 @@ command() {
 }
 
 await_command() {
-  local id=$1 enabled=$2
+  local id=$1 enabled=$2 reply attempt
   for attempt in {1..20}; do
-    if curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/commands/$id" |
-      jq -e --argjson enabled "$enabled" \
-        '.status == "applied" and .confirmedEnabled == $enabled' >/dev/null; then
+    if reply="$(curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/commands/$id")" &&
+      jq -e --argjson enabled "$enabled" '.status == "applied" and .confirmedEnabled == $enabled' \
+        >/dev/null <<< "$reply"; then
+      printf '%s\n' "$reply"
       return
     fi
     sleep 0.5
   done
   printf 'The simulator did not confirm the requested sampling state.\n' >&2
+  return 1
+}
+
+await_sensor() {
+  local connectivity=$1 samples=$2 confirmed=$3 attempt
+  for attempt in {1..25}; do
+    if curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/sensors?limit=1" |
+      jq -e --arg connectivity "$connectivity" --arg samples "$samples" --argjson confirmed "$confirmed" \
+        '.items[0] | .connectivity == $connectivity and .sampleStatus == $samples
+        and .confirmedEnabled == $confirmed' >/dev/null; then
+      return
+    fi
+    sleep 1
+  done
+  printf 'Expected %s connectivity and %s sample status.\n' "$connectivity" "$samples" >&2
   return 1
 }
 
@@ -155,11 +172,12 @@ SQL
 
 run_key="$(openssl rand -hex 8)"
 pause="$(command false "smoke-pause-$run_key")"
-await_command "$pause" false
+await_command "$pause" false >/dev/null
+await_sensor online paused false
 sleep 2
 [[ "$(readings_after_command "$pause")" == 0 ]]
 resume="$(command true "smoke-resume-$run_key")"
-await_command "$resume" true
+await_command "$resume" true >/dev/null
 for attempt in {1..12}; do
   if (( $(readings_after_command "$resume") > 0 )); then
     printf '%s\n' 'Simulator confirmed pause and resume and produced new readings after resume.'
@@ -171,3 +189,53 @@ for attempt in {1..12}; do
   fi
   sleep 0.5
 done
+
+await_sensor online fresh true
+for sequence in {1..20}; do
+  enabled=true
+  if (( sequence % 2 == 1 )); then enabled=false; fi
+  issued="$(command "$enabled" "smoke-latency-$sequence-$run_key")"
+  await_command "$issued" "$enabled" >> "$latency_samples"
+done
+mkdir -p build/ci
+python3 - "$latency_samples" <<'PY' | tee build/ci/command-latency.txt
+from datetime import datetime
+import json
+from math import ceil
+import sys
+
+def instant(stamp):
+    return datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+
+with open(sys.argv[1], encoding='utf-8') as samples:
+    results = [json.loads(line) for line in samples]
+latencies = sorted((instant(row['resolvedAt']) - instant(row['createdAt'])).total_seconds() * 1000
+                   for row in results)
+assert len(latencies) == 20 and latencies[0] >= 0, latencies
+p95 = latencies[ceil(0.95 * len(latencies)) - 1]
+print(f'Online commands: {len(latencies)}; p95: {p95:.0f} ms; max: {latencies[-1]:.0f} ms')
+assert p95 <= 5000, 'Online command p95 exceeded five seconds'
+PY
+
+stack stop simulator
+await_sensor offline stale true
+offline="$(command false "smoke-offline-$run_key")"
+curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/commands/$offline" |
+  jq -e '.status == "pending" and .requestedEnabled == false' >/dev/null
+for attempt in {1..65}; do
+  if curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/commands/$offline" |
+    jq -e '.status == "expired"' >/dev/null; then
+    break
+  fi
+  if [[ "$attempt" == 65 ]]; then
+    printf '%s\n' 'Expected the offline command to expire.' >&2
+    exit 1
+  fi
+  sleep 1
+done
+stack up -d --no-deps --no-build --wait --wait-timeout 45 simulator
+await_sensor online fresh true
+curl --fail --silent --show-error --cookie "$cookies" "$url/api/v1/sensors?limit=1" |
+  jq -e --arg id "$offline" '.items[0] | .desiredEnabled == false and .confirmedEnabled == true
+    and (.latestCommand | .commandId == $id and .status == "expired")' >/dev/null
+printf '%s\n' 'The offline pause expired and reconnection preserved the last confirmed state.'

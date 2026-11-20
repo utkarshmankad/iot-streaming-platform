@@ -42,7 +42,12 @@ class BrowserCommands {
       @AuthenticationPrincipal BrowserSession.Principal principal,
       @PathVariable UUID sensor,
       @RequestHeader("Idempotency-Key") String key,
+      @RequestHeader(value = "X-IoT-Tenant", required = false) String expectedTenant,
       @RequestBody Request request) {
+    if (expectedTenant != null && !principal.tenantId().toString().equals(expectedTenant)) {
+      throw new BrowserProblems.Failure(
+          HttpStatus.CONFLICT, "SESSION_CHANGED", "The browser session changed.");
+    }
     if (!"operator".equals(role(principal))) {
       throw BrowserProblems.forbidden();
     }

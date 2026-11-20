@@ -7,6 +7,10 @@ import iot.platform.backend.analytics.TrendStorage.Resolution;
 import iot.platform.control.CommandProtocol;
 import iot.platform.control.proto.PendingCommands;
 import iot.platform.control.proto.SamplingAcknowledgment;
+import iot.platform.telemetry.HeartbeatBatchLimits;
+import iot.platform.telemetry.proto.SensorHeartbeatBatch;
+import iot.platform.telemetry.proto.SensorHeartbeatObservation;
+import iot.platform.telemetry.proto.TelemetryHeartbeat;
 import java.net.CookieManager;
 import java.net.CookiePolicy;
 import java.net.URI;
@@ -74,6 +78,7 @@ class BrowserReadApiIntegrationTest {
             String cursor = verifyPagination(a);
             verifyTrends(a, now);
             verifyCommands(a, b, port, owner);
+            verifyLiveness(a, b, port, owner);
             verifySwitchAndRevoke(a, b, owner, cursor, now);
           }
         }
@@ -303,6 +308,10 @@ class BrowserReadApiIntegrationTest {
         403,
         "INVALID_CSRF");
     assertProblem(a.send("POST", browserPath, "{}", csrf, "missing-state"), 400, "INVALID_COMMAND");
+    assertProblem(
+        a.send("POST", browserPath, "{\"enabled\":false}", csrf, "wrong-scope", B.toString()),
+        409,
+        "SESSION_CHANGED");
     var accepted = a.send("POST", browserPath, "{\"enabled\":false}", csrf, "pause");
     var pause = body(accepted, 202);
     assertEquals("pending", pause.path("status").asText());
@@ -429,6 +438,82 @@ class BrowserReadApiIntegrationTest {
         .build();
   }
 
+  private static void verifyLiveness(Browser a, Browser b, int port, Connection owner)
+      throws Exception {
+    String device = "00000000-0000-4000-8000-000000000002";
+    long now = System.currentTimeMillis();
+    var live =
+        SensorHeartbeatObservation.newBuilder()
+            .setDeviceId(device)
+            .setHeartbeat(
+                TelemetryHeartbeat.newBuilder()
+                    .setSchemaVersion(1)
+                    .setSensorId(SENSOR.toString())
+                    .setEnabled(true)
+                    .setObservedAtMs(now)
+                    .setAppliedCommandVersion(4))
+            .build();
+    try (var gateway = HttpClient.newHttpClient()) {
+      String endpoint = "http://127.0.0.1:" + port + HeartbeatBatchLimits.PATH;
+      var invalid = live.toBuilder().setDeviceId(new UUID(0, 999).toString()).build();
+      assertEquals(204, postHeartbeat(gateway, endpoint, 'b', invalid));
+      assertEquals("unknown", firstSensor(b).path("connectivity").asText());
+      assertEquals(401, postHeartbeat(gateway, endpoint, 'c', live));
+      assertEquals(204, postHeartbeat(gateway, endpoint, 'a', live));
+      var sensor = firstSensor(a);
+      assertEquals("online", sensor.path("connectivity").asText());
+      assertEquals("stale", sensor.path("sampleStatus").asText());
+      assertEquals("applied", sensor.path("latestCommand").path("status").asText());
+      assertEquals(4, sensor.path("latestCommand").path("version").asLong());
+      assertEquals("unknown", firstSensor(b).path("connectivity").asText());
+
+      var replay =
+          live.toBuilder()
+              .setHeartbeat(live.getHeartbeat().toBuilder().setObservedAtMs(now - 5_000))
+              .build();
+      assertEquals(204, postHeartbeat(gateway, endpoint, 'a', replay));
+      assertEquals(sensor.path("lastHeartbeatAt"), firstSensor(a).path("lastHeartbeatAt"));
+      var future =
+          live.toBuilder()
+              .setHeartbeat(live.getHeartbeat().toBuilder().setObservedAtMs(now + 30_000))
+              .build();
+      assertEquals(204, postHeartbeat(gateway, endpoint, 'a', future));
+      var clamped = firstSensor(a).path("lastHeartbeatAt");
+      assertTrue(Instant.parse(clamped.asText()).isBefore(Instant.ofEpochMilli(now + 30_000)));
+      assertEquals(204, postHeartbeat(gateway, endpoint, 'a', future));
+      assertEquals(clamped, firstSensor(a).path("lastHeartbeatAt"));
+      try (var update =
+          owner.prepareStatement(
+              """
+          UPDATE registry.sensor_state SET last_heartbeat_at=clock_timestamp()-interval '16 seconds'
+          WHERE tenant_id=? AND sensor_id=?
+          """)) {
+        update.setObject(1, A);
+        update.setObject(2, SENSOR);
+        assertEquals(1, update.executeUpdate());
+      }
+      assertEquals("offline", firstSensor(a).path("connectivity").asText());
+      assertEquals("stale", firstSensor(a).path("sampleStatus").asText());
+    }
+  }
+
+  private static int postHeartbeat(
+      HttpClient http, String endpoint, char tenant, SensorHeartbeatObservation observation)
+      throws Exception {
+    var body = SensorHeartbeatBatch.newBuilder().addObservations(observation).build().toByteArray();
+    return http.send(
+            internal(endpoint, tenant)
+                .header("Content-Type", CommandProtocol.CONTENT_TYPE)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build(),
+            HttpResponse.BodyHandlers.discarding())
+        .statusCode();
+  }
+
+  private static JsonNode firstSensor(Browser browser) throws Exception {
+    return body(browser.get("/sensors?limit=1"), 200).path("items").get(0);
+  }
+
   private static double historicalMean(Browser browser, Instant now) throws Exception {
     Instant end = Resolution.QUARTER_HOUR.endOf(now).minus(QUARTER);
     var bucket =
@@ -492,7 +577,16 @@ class BrowserReadApiIntegrationTest {
 
     HttpResponse<String> send(String method, String path, String content, String csrf, String key)
         throws Exception {
+      return send(method, path, content, csrf, key, null);
+    }
+
+    HttpResponse<String> send(
+        String method, String path, String content, String csrf, String key, String tenant)
+        throws Exception {
       var request = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(15));
+      if (tenant != null) {
+        request.header("X-IoT-Tenant", tenant);
+      }
       if (key != null) {
         request.header("Idempotency-Key", key);
       }

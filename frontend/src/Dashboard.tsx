@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { ApiError, pollingInterval, readSensors, readTrends, type Resolution, type Sensor, type Tenant, type Trends } from './api';
+import { SensorControl } from './SensorControl';
 import { alignedRange, metricNames, periods, ranges, resolutions, timestamp } from './ranges';
 
 const TrendChart = lazy(() => import('./TrendChart'));
@@ -22,7 +23,7 @@ export function Dashboard({ tenant, onSessionChanged }: { tenant: Tenant; onSess
     queryFn: ({ pageParam, signal }) => readSensors(tenant.tenantId, pageParam, signal),
     initialPageParam: null as string | null,
     getNextPageParam: (page) => page.nextCursor ?? undefined,
-    refetchInterval: (query) => pollingInterval(query.state.error),
+    refetchInterval: (query) => pollingInterval(query.state.error, 5_000),
   });
   const sensors = registry.data?.pages.flatMap((page) => page.items) ?? [];
   const metrics = [...new Set(sensors.map((sensor) => sensor.type))];
@@ -177,7 +178,7 @@ export function Dashboard({ tenant, onSessionChanged }: { tenant: Tenant; onSess
               <thead><tr>
                 <th scope="col">Plot</th><th scope="col">Sensor</th><th scope="col">Connectivity</th>
                 <th scope="col">Reading status</th><th scope="col">Desired</th><th scope="col">Confirmed</th>
-                <th scope="col">Last sample</th>
+                <th scope="col">Last sample</th><th scope="col">Control</th>
               </tr></thead>
               <tbody>
                 {showing.map((sensor) => (
@@ -196,6 +197,7 @@ export function Dashboard({ tenant, onSessionChanged }: { tenant: Tenant; onSess
                     <td>{sensor.desiredEnabled ? 'Enabled' : 'Paused'}</td>
                     <td>{sensor.confirmedEnabled === null ? 'Unknown' : sensor.confirmedEnabled ? 'Enabled' : 'Paused'}</td>
                     <td>{sensor.lastObservedAt ? timestamp.format(new Date(sensor.lastObservedAt)) : 'No reading yet'}</td>
+                    <td><SensorControl sensor={sensor} tenant={tenant} unavailable={registry.isError} onSessionChanged={onSessionChanged} /></td>
                   </tr>
                 ))}
               </tbody>

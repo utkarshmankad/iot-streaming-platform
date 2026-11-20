@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.UnknownFieldSet;
 import com.sun.net.httpserver.HttpServer;
+import io.micrometer.core.instrument.MeterRegistry;
 import iot.platform.backend.BackendApplication;
 import iot.platform.telemetry.TelemetryBatchLimits;
 import iot.platform.telemetry.proto.TelemetryBatch;
@@ -86,12 +87,17 @@ class TelemetryIngestIntegrationTest {
                   "http://127.0.0.1:"
                       + runtime.getEnvironment().getProperty("local.server.port")
                       + PATH);
+          var commits =
+              runtime.getBean(MeterRegistry.class).get("iot.ingest.gateway.to.commit").timer();
           var now = System.currentTimeMillis();
           verifyMixedBatch(http, endpoint, now, owner);
+          assertEquals(2, commits.count());
           verifyHttpEnvelope(http, endpoint, now);
           verifyTenantScope(database.getJdbcUrl());
           verifyConcurrentClaims(http, endpoint, now, owner);
+          assertEquals(4, commits.count());
           verifyRollbackAndLostResponse(http, endpoint, now, owner);
+          assertEquals(5, commits.count());
         }
       }
     }

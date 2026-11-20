@@ -295,6 +295,17 @@ jobs:
       - run: docker load --input stack-images.tar.gz
       - run: ./scripts/stack.sh test up-built
       - run: bash scripts/ci/smoke.sh
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: frontend/.nvmrc
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm install --global npm@11.19.1
+      - run: npm --prefix frontend ci
+      - working-directory: frontend
+        run: npm exec -- playwright install --with-deps --only-shell chromium
+      - name: Test the dashboard in Chromium
+        run: bash scripts/ci/browser.sh
       - name: Collect Compose logs and remove disposable volumes
         if: always()
         run: |
@@ -313,6 +324,7 @@ jobs:
           name: smoke
           path: |
             build/ci/compose.log
+            build/ci/browser.xml
             build/ci/faults/
           if-no-files-found: ignore
           retention-days: 14
@@ -336,7 +348,9 @@ jobs:
           name: stack-images
       - run: docker load --input stack-images.tar.gz
       - run: ./scripts/stack.sh test up-built
-      - run: ./gradlew :perf:gatlingRun -Dperf.baseUrl=http://127.0.0.1:18080 --no-daemon
+        env:
+          IOT_STACK_SIM_STREAMS_PER_TYPE: '11'
+      - run: bash scripts/ci/performance.sh
       - name: Collect Compose logs and remove disposable volumes
         if: always()
         run: |
@@ -353,6 +367,7 @@ jobs:
           name: performance
           path: |
             perf/build/reports/gatling/**
+            build/ci/performance-ingest.txt
             build/ci/compose.log
           if-no-files-found: ignore
           retention-days: 14

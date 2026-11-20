@@ -1,5 +1,7 @@
 package iot.platform.backend.ingest;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import iot.platform.backend.registry.GatewayAccess;
 import iot.platform.backend.registry.GatewayAccess.Assignment;
 import iot.platform.telemetry.SensorType;
@@ -13,6 +15,7 @@ import iot.platform.telemetry.proto.TelemetryEvent;
 import java.nio.ByteBuffer;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -21,10 +24,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 @Profile("registry")
@@ -36,10 +42,16 @@ class TelemetryIngest {
       Instant.parse("-004712-01-03T00:00:00Z").toEpochMilli();
   private final GatewayAccess access;
   private final TelemetryStore store;
+  private final Timer receiptToCommit;
 
-  TelemetryIngest(GatewayAccess access, TelemetryStore store) {
+  TelemetryIngest(GatewayAccess access, TelemetryStore store, MeterRegistry metrics) {
     this.access = access;
     this.store = store;
+    receiptToCommit =
+        Timer.builder("iot.ingest.gateway.to.commit")
+            .description("Gateway receipt to database commit for newly committed readings")
+            .serviceLevelObjectives(Duration.ofSeconds(3))
+            .register(metrics);
   }
 
   @Transactional(isolation = Isolation.READ_COMMITTED, timeout = 5)
@@ -138,10 +150,19 @@ class TelemetryIngest {
         store.fingerprints(
             tenant, first.keySet().stream().filter(key -> !claimed.contains(key)).toList());
     if (!claimed.isEmpty()) {
-      store.insert(
-          tenant,
-          first.values().stream().filter(item -> claimed.contains(item.key())).toList(),
-          receivedMs);
+      var inserted = first.values().stream().filter(item -> claimed.contains(item.key())).toList();
+      store.insert(tenant, inserted, receivedMs);
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              long committedAt = System.currentTimeMillis();
+              for (var reading : inserted) {
+                receiptToCommit.record(
+                    Math.max(0, committedAt - reading.gatewayReceivedMs()), TimeUnit.MILLISECONDS);
+              }
+            }
+          });
     }
 
     for (var item : valid) {

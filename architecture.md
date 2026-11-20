@@ -1,8 +1,8 @@
 # Environmental IoT streaming platform architecture
 
-**Version 0.5 · Baseline specification v0.5**
+**Version 0.6 · Specification v0.6**
 
-The platform is a single-laptop Docker Compose deployment. It runs six types of simulated sensors across at least two tenants, supports sampling controls from the browser, and is designed to ingest about 1 GB of unique telemetry bodies per active day over 15 days. Requirements and acceptance thresholds are defined in [specs.md](specs.md).
+The laptop Docker Compose deployment is the development, CI and soak baseline. The local two-host design below is for a physical ARM64 gateway. It runs six types of simulated sensors across at least two tenants, supports sampling controls from the browser, and is designed to ingest about 1 GB of unique telemetry bodies per active day over 15 days. Requirements and acceptance thresholds are defined in [specs.md](specs.md).
 
 ## 1. Deployment and service boundaries
 
@@ -40,6 +40,47 @@ Publish only the frontend port on loopback. Use private Compose networks to sepa
 For development, `compose.dev.yaml` provides TimescaleDB and an authenticated Mosquitto instance on configurable loopback ports. The Java services and Vite run on the host for debugging and hot reload. The development database has its own named volume. The deployment topology above keeps those dependency ports internal.
 
 The deployment Compose file provides `local` and `test` profiles with distinct project names and storage. It builds separate images for backend, gateway, simulator and frontend, publishes only the dashboard on loopback, and isolates service links on internal Docker networks. A dedicated frontend ingress bridge has outbound masquerading disabled. M0 exposes Spring process readiness and metrics. Initial dependency readiness is checked by Compose before starting dependents. Runtime telemetry, dependency-specific readiness and the durable alarm receiver land with their feature tasks. [Local deployment runbook](docs/local-deployment.md)
+
+### Local two-host Docker layout
+
+~~~mermaid
+flowchart LR
+  subgraph Laptop["Laptop · local Docker"]
+    Sim["Sensor simulator"]
+    API["Java backend"]
+    DB[("TimescaleDB")]
+    Web["Nginx · React"]
+    Monitor["Monitoring"]
+    Web --> API
+    API --> DB
+  end
+  subgraph ARM["One ARM64 Linux device · edge Docker"]
+    MQTT["Mosquitto"]
+    Gateway["Java gateway"]
+    Card[("SD · spool and registry cache")]
+    MQTT <-->|"MQTT 5 on private bridge"| Gateway
+    Gateway --- Card
+  end
+  Sim <-->|"MQTT 5 on the site LAN"| MQTT
+  Gateway <-->|"Authenticated registry, batches and command exchange"| API
+~~~
+
+| Host | Compose services and network access |
+|---|---|
+| ARM64 gateway | Run the Java gateway and Mosquitto as separate containers on one private bridge. The gateway resolves `mosquitto:1883` on that bridge. Bind the broker listener to the ARM device's site-LAN address for simulator traffic and limit access to the authorized sensor network. |
+| Laptop | Run the simulator, Java backend, TimescaleDB, React/Nginx and monitoring. Use the broker's ARM LAN address for the simulator. Publish the dashboard on laptop loopback and provide a LAN listener restricted to the ARM device for the authenticated gateway endpoints. Keep TimescaleDB on the private laptop network. |
+
+Provision the matching broker ACL and credentials from the laptop registry. Transfer the generated ACL to the edge securely and mount it read-only in Mosquitto. Store the MQTT data and the gateway state in separate directories. Mount the SD card by filesystem UUID, verify that it is present and writable before starting Compose, and bind its gateway state directory to `/var/lib/iot`. Keep SQLite WAL and `synchronous=FULL` with the spool and registry cache on that card. A missing or read-only card leaves ingestion unavailable until durable writes can resume. Measure the SD footprint separately from container images. The single-laptop Compose profile remains the reproducible CI and soak baseline.
+
+### Future production and site recovery
+
+Production places the Java backend, TimescaleDB and React monitoring in the cloud. Each site retains the ARM64 gateway, Mosquitto and the SD-backed queue. The gateway initiates authenticated connections to the cloud over the uplink.
+
+| Scenario | Expected behavior |
+|---|---|
+| WAN link down while the gateway is running | The gateway continues writing to its SD card. The cloud dashboard shows stale data for that site. Replay starts automatically when connectivity returns. |
+| Gateway down | The dashboard shows the site's last known data and reading time. A technician restores the gateway on-site. The restored gateway drains the surviving queue while forwarding new readings. |
+| Backlog replay | Preserve original event IDs and observation times. Deduplicate retries and repair historical buckets where samples survive. Clear the stale indicator when fresh readings arrive. Unrecoverable readings remain gaps. |
 
 ## 2. Technology choices
 
@@ -190,7 +231,7 @@ A returned bucket has the following shape. The enclosing series identifies the s
 }
 ```
 
-Scope command idempotency keys to tenant, actor and sensor. Store the normalized request and command reference with the command transaction. Identical replays return the same command ID and original acceptance response, even if its status has since advanced. Reusing a key with a different requested state returns `409 IDEMPOTENCY_CONFLICT`. The default expiration is 60 seconds from creation. A sequence of commands can supersede pending requests. Status responses preserve the outcome for each command and cannot downgrade a newer confirmed sensor state.
+Scope command idempotency keys to tenant, actor and sensor. Store the normalized request and command reference with the command transaction. Identical replays return the same command ID and original acceptance response, even if its status has since advanced. Reusing a key with a different requested state returns `409 IDEMPOTENCY_CONFLICT`. The default expiration is 60 seconds from creation. If an acknowledgment arrives after the deadline, the command remains Expired. Record the valid late acknowledgment for audit. Update confirmed sensor state only when its device application timestamp is within the command validity window and its applied version is newer than the confirmed version. A sequence of commands can supersede pending requests. Status responses preserve the outcome for each command and cannot downgrade a newer confirmed sensor state.
 
 Errors use `{"code":"INVALID_BUCKET","message":"…","requestId":"…"}` with optional field-level details. Use `400` for invalid parameters, `401` for a missing or expired session, `403` for insufficient permissions or CSRF failure, `404` for an unknown or out-of-tenant resource, `409` for conflicts, `429` with `Retry-After` for throttling, and `503` for temporary service unavailability. For a trend request containing an unknown or out-of-tenant sensor, reject the entire request with the same generic `404`. The dashboard polls visible trends about every 15 seconds and backs off on temporary errors. The backend defaults to 120 trend requests per tenant per minute. The read and session operations are defined in the [OpenAPI contract](contracts/openapi/browser-v1.yaml), which also records the command operations planned for M3.1.
 
@@ -218,7 +259,7 @@ Run OpenAPI and Protobuf schema validation in CI. Exercise tenant-scoped paginat
 
 ## 7. Multi-day recovery and scale measurement
 
-- WAN loss leaves the Compose data path operational. A gateway/backend partition is absorbed by the gateway spool. Simulator/gateway isolation is absorbed by the simulator outbox. Size each queue to at least 10 decimal GB usable or 1.3 times measured seven-day on-disk growth, whichever is larger. Bound and monitor per-tenant allocation, total bytes, oldest-event age and disk headroom. Simulator downtime leaves a real gap for samples that were never generated.
+- WAN loss leaves both local data paths operational while the site LAN remains available. A gateway/backend partition is absorbed by the gateway spool. Simulator/gateway isolation is absorbed by the simulator outbox. Size each queue to at least 10 decimal GB usable or 1.3 times measured seven-day on-disk growth, whichever is larger. Bound and monitor per-tenant allocation, total bytes, oldest-event age and disk headroom. Simulator downtime leaves a real gap for samples that were never generated.
 - On reconnect, share ingestion capacity between live and replay traffic with fair tenant scheduling. Target total commits of at least 4× steady load, leaving at least 3× steady capacity for backlog if live traffic remains constant. The recovery test targets a seven-day backlog drained within three days. Verify while trends are under representative load.
 - Take daily base backups and archive WAL continuously to the independent encrypted drive. Configure and monitor WAL segment archival lag, including during low throughput. Snapshot the two live SQLite databases with consistent backup tooling. Version a manifest with checksums, backup times, restore prerequisites and schema versions. Keep 30 days of recoverable backups through final verification. Measure backend RPO against the 15-minute target while archival is healthy and queue-volume RPO against the 24-hour snapshot target.
 - Restore into isolated volumes with writes and dispatch paused. Recover PostgreSQL to the selected point using a matching PostgreSQL major and TimescaleDB extension version. Restore queue snapshots, invalidate older pending commands, reconcile simulator state and replay recoverable events through the normal receipt ledger. Independently taken backups can expose gaps, so reconcile saved counters and report unrecoverable ranges. Verify chart repair, tenant isolation and command behavior before reopening traffic. Measure queryable-stack recovery against four hours and backlog clearance separately.
@@ -337,3 +378,4 @@ Record changes to design decisions, interfaces or operational behavior here in t
 | M2.1 analytics storage | This revision | Added the private 15-minute continuous aggregate, snapshot-consistent raw and materialized coverage, tenant-bound rollups, and a durable revisioned repair queue. |
 | M2.2 browser read API | This revision | Added the OpenAPI contract, session and CSRF lifecycle, membership-bound tenant switching, sensor pagination and bounded trend queries. |
 | M2.3 dashboard and performance | This revision | Added the tenant-scoped React dashboard, UTC chart and registry workflow, Chromium checks, and concurrent ingest and trend performance evidence. |
+| v0.6 local ARM64, site recovery and command expiry | This revision | Designed co-located gateway and Mosquitto with an SD-backed spool. Recorded future cloud staleness, technician-led gateway recovery and the terminal Expired status for late acknowledgments. |

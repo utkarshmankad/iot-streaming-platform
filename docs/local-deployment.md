@@ -8,7 +8,7 @@ Install Docker with Compose and OpenSSL. From the repository root, build and sta
 curl --fail http://127.0.0.1:8080/healthz
 ```
 
-Open the dashboard at `http://127.0.0.1:8080`. Change the published loopback port with `IOT_HTTP_PORT` when needed. The first build downloads pinned images and dependencies. The stack includes separate backend, gateway, simulator and frontend images, plus TimescaleDB, Mosquitto, Prometheus, Alertmanager and the alarm receiver scaffold.
+Open the dashboard at `http://127.0.0.1:8080`. Change the published loopback port with `IOT_HTTP_PORT` when needed. The first build downloads pinned images and dependencies. The stack includes separate backend, gateway, simulator and frontend images, plus TimescaleDB, Mosquitto, Prometheus, Alertmanager and the durable alarm receiver.
 
 The stack script writes generated database, broker, gateway and demo operator credentials to an ignored, owner-only `.env.stack`. It adds missing registry credentials to existing files without replacing their database or broker probe passwords. Keep this file with the local deployment data volume because PostgreSQL reads the initialization password on first startup.
 
@@ -28,6 +28,33 @@ The gateway refreshes both authorized snapshots from the backend every 30 second
 The demo starts one stream per sensor type in each tenant, at one reading per second. Increase `IOT_STACK_SIM_STREAMS_PER_TYPE` to register more streams per type and tenant. Existing registrations are preserved on reprovisioning. Use a separate test dataset to try a lower count. Set `IOT_STACK_SIM_SEED` to reproduce a reading sequence for the same assignment and sample times. Set `IOT_STACK_SIM_MAX_BYTES_PER_TENANT` to adjust the pending Protobuf payload budget, which defaults to five decimal GB per tenant. Account for SQLite overhead and WAL when sizing Docker storage.
 
 The simulator publishes binary telemetry and heartbeats to the private broker. It keeps unacknowledged events across restarts and republishes the same bytes after a receipt timeout. The gateway sends receipts once it durably queues readings or recognizes a queued duplicate.
+
+## Alarms and metrics
+
+Platform operators with local Docker access can inspect the operations plane while the app or TimescaleDB is unavailable. Prometheus, Alertmanager and the receiver have private service addresses. The dashboard is published on loopback.
+
+```sh
+python3 scripts/observe.py local rules
+python3 scripts/observe.py local alerts
+python3 scripts/observe.py local history
+python3 scripts/observe.py local export first-soak
+python3 scripts/observe.py local watch first-soak
+```
+
+`rules` shows pending and firing rules. `alerts` lists Alertmanager groups. `history` reads the SQLite ledger inside the receiver container. `export` writes the past 24 hours of metrics, Docker CPU, memory and container restarts, host disk use and bounded container logs under `run-artifacts/<run-id>/metrics/<UTC-date>/` and the current history at `run-artifacts/<run-id>/alarms.ndjson`. Run `watch` as a laptop process during the soak for one export per UTC day. It retries a missed export when the laptop and Docker are available. The receiver independently records watchdog gaps across laptop sleep or container downtime.
+
+Read live service logs with `docker compose --env-file .env.stack --profile local logs --since 15m <service>`. Java runtime and Nginx access logs use JSON. Container logs rotate at five 20 MB files per service. Keep diagnostic exports outside Git. Keep the independent alarm volume when recreating containers. Confirmed sensor state and operator command audit remain in the tenant-scoped registry.
+
+Prometheus keeps 30 days of metrics subject to the 8 GB size cap. Set `IOT_STACK_METRICS_RETENTION_SIZE` in `.env.stack` after measuring the pilot workload, and record any early eviction in the soak report.
+
+| Alarm stage | Recovery checks |
+|---|---|
+| Monitoring or broker | Check target health and the latest watchdog timestamp before treating missing metrics as healthy. Inspect Mosquitto and registry ACLs if broker samples stop. |
+| Delivery, sensors or ingest | Check MQTT and backend connectivity. Watch the oldest event and per-tenant queue budget during replay. Reconcile any producer drops before closing the incident. |
+| Database, trends or controls | Check TimescaleDB, aggregate refresh and the command relay. Verify successful commits and new samples after recovery. |
+| Storage or backup | Check Docker and host free space. Reconnect the independent backup target and verify checksums and the last verified backup time. |
+
+A backup job can publish its most recent verified UTC epoch with `python3 scripts/observe.py local backup-status --verified-epoch <epoch>`. Use `--checksum-failed` to report a failed verification while preserving the last verified timestamp. The automatic backup job that publishes these signals is scheduled in M3.4.
 
 ## Inspect the gateway spool
 
@@ -57,7 +84,7 @@ docker compose --env-file .env.stack --profile local logs --tail 100
 ./scripts/stack.sh local status
 ```
 
-`offline-up` recreates containers from images already present and forbids building or pulling. The service networks are internal. The dashboard is the sole published endpoint and uses a separate loopback ingress bridge with outbound masquerading disabled. The local project retains database, MQTT, queue and monitoring volumes when containers are recreated. The simulator volume stores its SQLite outbox and sequence checkpoints. The alarm volume reserves storage for a later milestone. Alertmanager has an internal webhook target. The scaffold reports unavailable for webhook deliveries until the durable receiver lands.
+`offline-up` recreates containers from images already present and forbids building or pulling. The service networks are internal. The dashboard is the sole published endpoint and uses a separate loopback ingress bridge with outbound masquerading disabled. The local project retains database, MQTT, queue and monitoring volumes when containers are recreated. The simulator volume stores its SQLite outbox and sequence checkpoints. The alarm volume stores the durable SQLite ledger. Alertmanager sends authenticated firing and resolved notifications over the private monitoring network.
 
 ## Stop, reset or run the test project
 

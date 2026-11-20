@@ -95,7 +95,14 @@ class GatewayDeliveryTest {
         action,
         (client, registry, endpoint) -> {
           try (var spool = GatewaySpool.open(directory.resolve("delivery.sqlite"), 100_000)) {
-            var delivery = new GatewayDelivery(spool, registry, client, endpoint);
+            var delivery =
+                new GatewayDelivery(
+                    spool,
+                    registry,
+                    client,
+                    endpoint,
+                    new io.micrometer.core.instrument.simple.SimpleMeterRegistry()
+                        .counter("retry"));
             var entries =
                 java.util.stream.IntStream.rangeClosed(1, 250)
                     .mapToObj(id -> GatewaySpoolTest.reading(id, "reading-" + id, NOW))
@@ -167,7 +174,14 @@ class GatewayDeliveryTest {
         action,
         (client, registry, endpoint) -> {
           try (var spool = GatewaySpool.open(directory.resolve("split.sqlite"), 1000)) {
-            var delivery = new GatewayDelivery(spool, registry, client, endpoint);
+            var delivery =
+                new GatewayDelivery(
+                    spool,
+                    registry,
+                    client,
+                    endpoint,
+                    new io.micrometer.core.instrument.simple.SimpleMeterRegistry()
+                        .counter("retry"));
             spool.admit(
                 TENANT_A,
                 List.of(

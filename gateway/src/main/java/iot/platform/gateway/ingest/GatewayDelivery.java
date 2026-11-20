@@ -1,6 +1,7 @@
 package iot.platform.gateway.ingest;
 
 import com.google.protobuf.InvalidProtocolBufferException;
+import io.micrometer.core.instrument.Counter;
 import iot.platform.gateway.registry.RegistryCache;
 import iot.platform.telemetry.TelemetryBatchLimits;
 import iot.platform.telemetry.proto.TelemetryBatch;
@@ -32,17 +33,20 @@ final class GatewayDelivery {
   private final RegistryCache registry;
   private final HttpClient http;
   private final URI endpoint;
+  private final Counter retries;
   private Flight pending;
   private int batchLimit = TelemetryBatchLimits.MAX_ENTRIES;
   private int failures;
   private long retryAt;
   private boolean preferReplay;
 
-  GatewayDelivery(GatewaySpool spool, RegistryCache registry, HttpClient http, URI endpoint) {
+  GatewayDelivery(
+      GatewaySpool spool, RegistryCache registry, HttpClient http, URI endpoint, Counter retries) {
     this.spool = spool;
     this.registry = registry;
     this.http = http;
     this.endpoint = endpoint;
+    this.retries = retries;
   }
 
   void tick(long now) throws SQLException {
@@ -144,6 +148,7 @@ final class GatewayDelivery {
   private void retry(List<GatewaySpool.Queued> events, long now, String reason)
       throws SQLException {
     spool.retry(registry.tenant(), events, now);
+    retries.increment();
     if (failures == 0) {
       LOG.warn(
           "Gateway batch delivery deferred for tenant {} with reason {}",

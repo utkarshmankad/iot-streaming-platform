@@ -1,5 +1,7 @@
 package iot.platform.backend.control;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import iot.platform.backend.registry.GatewayAccess.Assignment;
 import iot.platform.control.CommandProtocol;
 import iot.platform.control.proto.PendingCommand;
@@ -8,6 +10,7 @@ import iot.platform.control.proto.SamplingAcknowledgment;
 import iot.platform.control.proto.SamplingCommand;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -16,14 +19,22 @@ import java.util.UUID;
 import org.springframework.context.annotation.Profile;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Repository
 @Profile("registry")
 public class CommandStore {
   private final JdbcClient jdbc;
 
-  CommandStore(JdbcClient jdbc) {
+  private final Timer acknowledgment;
+
+  CommandStore(JdbcClient jdbc, MeterRegistry registry) {
     this.jdbc = jdbc;
+    acknowledgment =
+        Timer.builder("iot.command.ack")
+            .serviceLevelObjectives(Duration.ofSeconds(5))
+            .register(registry);
   }
 
   public Optional<Command> create(
@@ -230,6 +241,15 @@ public class CommandStore {
             """)
         .params(actual, current.version(), tenant, sensor, current.version())
         .update();
+    if ("applied".equals(status)) {
+      TransactionSynchronizationManager.registerSynchronization(
+          new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+              acknowledgment.record(Duration.between(current.createdAt(), received));
+            }
+          });
+    }
     return AckOutcome.ACCEPTED;
   }
 

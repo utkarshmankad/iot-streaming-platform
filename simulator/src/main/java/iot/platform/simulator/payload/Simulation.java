@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import org.eclipse.paho.mqttv5.common.MqttException;
@@ -40,6 +41,8 @@ final class Simulation {
   private final Map<SensorStream.Device, MqttDeviceSession> sessions = new LinkedHashMap<>();
   private final Map<UUID, AtomicReference<SimulatorOutbox.Stats>> statistics =
       new LinkedHashMap<>();
+  private final Map<UUID, AtomicLong> receiptTimes = new LinkedHashMap<>();
+  private final long maximumBytes;
   private final long seed;
   private final Path faultSilence;
   private long previousTick;
@@ -57,6 +60,7 @@ final class Simulation {
       Environment environment)
       throws Exception {
     this.seed = seed;
+    this.maximumBytes = maximumBytes;
     streams = SensorStream.read(assignments);
     var passwords = Map.of("device-a", deviceA, "device-b", deviceB);
     boolean faultTest = environment.matchesProfiles("fault-test");
@@ -119,6 +123,12 @@ final class Simulation {
       for (var entry : statistics.entrySet()) {
         var current = outbox.stats(entry.getKey());
         var previous = entry.getValue().getAndSet(current);
+        if (current.pendingEvents() == 0
+            || previous.pendingEvents() == 0
+            || previous.accepted() != current.accepted()
+            || previous.rejected() != current.rejected()) {
+          receiptTimes.get(entry.getKey()).set(now);
+        }
         if (current.dropped() > previous.dropped()) {
           LOG.warn(
               "Simulator outbox capacity reached for tenant {}, total dropped events {}",
@@ -134,6 +144,17 @@ final class Simulation {
     var snapshot = new AtomicReference<>(outbox.stats(tenant));
     statistics.put(tenant, snapshot);
     String id = tenant.toString();
+    var receiptTime = new AtomicLong(clock.millis());
+    receiptTimes.put(tenant, receiptTime);
+    Gauge.builder(
+            "iot.simulator.receipt.age.seconds",
+            receiptTime,
+            time -> Math.max(0, clock.millis() - time.get()) / 1000.0)
+        .tag("tenant", id)
+        .register(meters);
+    Gauge.builder("iot.simulator.pending.capacity.bytes", this, sim -> sim.maximumBytes)
+        .tag("tenant", id)
+        .register(meters);
     FunctionCounter.builder(
             "iot.simulator.generated.events", snapshot, value -> value.get().generated())
         .tag("tenant", id)

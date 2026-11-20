@@ -1,0 +1,18 @@
+[
+  {
+    "tenantId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "sensorId": "00000000-0000-4000-8000-000000000001",
+    "eventId": "00000000-0000-4000-8000-000000000099",
+    "schemaVersion": 1,
+    "observedAt": "2026-01-01T00:00:00.000Z",
+    "value": 20
+  },
+  {
+    "tenantId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "sensorId": "00000000-0000-4000-8000-000000000001",
+    "eventId": "00000000-0000-4000-8000-000000000099",
+    "schemaVersion": 1,
+    "observedAt": "2026-01-01T00:00:00.000Z",
+    "value": 24
+  }
+]

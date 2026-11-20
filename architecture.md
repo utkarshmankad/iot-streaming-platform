@@ -117,6 +117,10 @@ PostgreSQL is authoritative for tenant membership, provisioning and sensor metad
 
 Create the registry and seed type/schema metadata through Flyway. Use an idempotent local provisioning command to register demo tenants, gateways, simulated devices and sensors, then generate the broker ACL projection. Credentials are managed as secrets with registry references. A gateway starts with a validated registry snapshot and caches a versioned last-known-good copy on disk. It refreshes from the backend when reachable and accepts only provisioned identities during a partition. Backend revalidates current ownership and schema acceptance during replay. Keep prior schema versions accepted for the supported replay window unless revoked, and record any permanent rejection during reconciliation.
 
+The demo registry is provisioned by the one-shot Compose jobs. Flyway owns the schema through `iot_migrate`. The backend uses the read-only `iot_app` role, with a transaction-local tenant setting for scoped reads. Gateway tokens are separate from MQTT passwords, generated outside Git, and stored in PostgreSQL only as SHA-256 digests. The two seeded tenants deliberately reuse registry IDs. The [overlapping event fixture](contracts/fixtures/overlapping-event-ids.json) supplies distinct synthetic values for later event isolation tests.
+
+The registry endpoint authenticates gateway bearer tokens on the private gateway/backend network and returns the checked-in [registry Protobuf contract](contracts/proto/registry.proto). A strong ETag hashes the exact response bytes and changes when the authorized snapshot changes. The gateway checks the digest, format, assigned IDs and registry fields before replacing its cache. It invalidates cached access on an explicit authentication rejection.
+
 ### Telemetry and control storage
 
 | Relation | Key and role |
@@ -304,3 +308,4 @@ Record changes to design decisions, interfaces or operational behavior here in t
 | M0.2 toolchain pins | This revision | Recorded exact scaffold dependency versions and selected PostgreSQL/TimescaleDB and Mosquitto images for the local and CI architectures. |
 | M0.3 development environment | This revision | Added a loopback-only database and MQTT development profile, generated local credentials, and host-side build, test and debugging workflows. |
 | M0.4 deployment scaffold | This revision | Added separate application images, private local/test Compose projects, health checks, monitoring scaffolds, persistent volumes and an offline recreation command. |
+| M1.1 registry foundation | This revision | Implemented Flyway registry migrations, tenant-scoped reads, demo credentials and MQTT ACL projection, and an authenticated Protobuf snapshot with a verified gateway cache. |

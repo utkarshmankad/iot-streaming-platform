@@ -50,10 +50,15 @@ services:
       context: .
       args:
         SERVICE: backend
+    environment:
+      <<: *java-environment
+      SPRING_PROFILES_ACTIVE: registry
+      IOT_REGISTRY_JDBC_URL: jdbc:postgresql://timescaledb:5432/iot
+      IOT_REGISTRY_APP_PASSWORD: ${IOT_STACK_APP_PASSWORD:-}
     networks: [dashboard, gateway-api, database]
     depends_on:
-      timescaledb:
-        condition: service_healthy
+      registry-provision:
+        condition: service_completed_successfully
 
   gateway:
     <<: *java
@@ -62,6 +67,12 @@ services:
       context: .
       args:
         SERVICE: gateway
+    environment:
+      <<: *java-environment
+      SPRING_PROFILES_ACTIVE: registry
+      IOT_REGISTRY_URL: http://backend:8080/internal/v1/registry
+      IOT_REGISTRY_GATEWAY_A_TOKEN: ${IOT_STACK_GATEWAY_A_TOKEN:-}
+      IOT_REGISTRY_GATEWAY_B_TOKEN: ${IOT_STACK_GATEWAY_B_TOKEN:-}
     networks: [sensors, gateway-api]
     volumes:
       - gateway-spool:/var/lib/iot
@@ -101,6 +112,49 @@ services:
       <<: *healthcheck
       test: [CMD-SHELL, 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
 
+  registry-roles:
+    profiles: [local, test]
+    logging: *logging
+    image: timescale/timescaledb:2.27.0-pg17
+    command:
+      - sh
+      - -ec
+      - |
+        : "$${IOT_MIGRATE_PASSWORD:?Missing generated registry credentials}"
+        : "$${IOT_APP_PASSWORD:?Missing generated registry credentials}"
+        psql -h timescaledb -U iot -d iot \
+          -v migrate_password="$$IOT_MIGRATE_PASSWORD" -v app_password="$$IOT_APP_PASSWORD" \
+          -f /run/registry-roles.sql
+    environment:
+      PGPASSWORD: ${IOT_STACK_DB_PASSWORD:?Run ./scripts/stack.sh local up or test up}
+      IOT_MIGRATE_PASSWORD: ${IOT_STACK_MIGRATE_PASSWORD:-}
+      IOT_APP_PASSWORD: ${IOT_STACK_APP_PASSWORD:-}
+    networks: [database]
+    volumes:
+      - ./config/postgres/registry-roles.sql:/run/registry-roles.sql:ro
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+
+  registry-provision:
+    profiles: [local, test]
+    logging: *logging
+    image: iot-platform-backend:${IOT_STACK_IMAGE_TAG:-local}
+    pull_policy: never
+    user: "10001:1883"
+    environment:
+      SPRING_PROFILES_ACTIVE: registry-provision
+      IOT_REGISTRY_JDBC_URL: jdbc:postgresql://timescaledb:5432/iot
+      IOT_REGISTRY_MIGRATE_PASSWORD: ${IOT_STACK_MIGRATE_PASSWORD:-}
+      IOT_REGISTRY_GATEWAY_A_TOKEN: ${IOT_STACK_GATEWAY_A_TOKEN:-}
+      IOT_REGISTRY_GATEWAY_B_TOKEN: ${IOT_STACK_GATEWAY_B_TOKEN:-}
+    networks: [database]
+    volumes:
+      - registry-acl:/var/lib/iot
+    depends_on:
+      registry-roles:
+        condition: service_completed_successfully
+
   mosquitto:
     profiles: [local, test]
     logging: *logging
@@ -108,17 +162,37 @@ services:
     user: "1883:1883"
     environment:
       MQTT_HEALTH_PASSWORD: ${IOT_STACK_MQTT_HEALTH_PASSWORD:?Run ./scripts/stack.sh local up or test up}
+      GATEWAY_A_PASSWORD: ${IOT_STACK_GATEWAY_A_MQTT_PASSWORD:-}
+      GATEWAY_B_PASSWORD: ${IOT_STACK_GATEWAY_B_MQTT_PASSWORD:-}
+      DEVICE_A_PASSWORD: ${IOT_STACK_DEVICE_A_MQTT_PASSWORD:-}
+      DEVICE_B_PASSWORD: ${IOT_STACK_DEVICE_B_MQTT_PASSWORD:-}
+    depends_on:
+      registry-provision:
+        condition: service_completed_successfully
     command:
       - sh
       - -ec
       - |
         umask 077
         mosquitto_passwd -b -c /tmp/iot-stack-passwd scaffold_health "$$MQTT_HEALTH_PASSWORD"
+        awk '/^user / { print $$2 }' /run/iot-registry/registry.acl |
+          while IFS= read -r principal; do
+            case "$$principal" in
+              gateway-a) password=$$GATEWAY_A_PASSWORD ;;
+              gateway-b) password=$$GATEWAY_B_PASSWORD ;;
+              device-a) password=$$DEVICE_A_PASSWORD ;;
+              device-b) password=$$DEVICE_B_PASSWORD ;;
+              scaffold_health) continue ;;
+              *) echo 'Registry ACL refers to an unconfigured MQTT principal' >&2; exit 1 ;;
+            esac
+            : "$${password:?Missing generated MQTT credentials}"
+            mosquitto_passwd -b /tmp/iot-stack-passwd "$$principal" "$$password"
+          done
         exec mosquitto -c /mosquitto/config/stack.conf
     networks: [sensors]
     volumes:
       - ./config/mosquitto/stack.conf:/mosquitto/config/stack.conf:ro
-      - ./config/mosquitto/stack.acl:/mosquitto/config/stack.acl:ro
+      - registry-acl:/run/iot-registry:ro
       - mqtt-data:/mosquitto/data
     healthcheck:
       <<: *healthcheck
@@ -187,6 +261,7 @@ networks:
 volumes:
   database: {}
   mqtt-data: {}
+  registry-acl: {}
   gateway-spool: {}
   simulator-outbox: {}
   metrics-data: {}

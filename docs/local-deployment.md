@@ -10,11 +10,22 @@ curl --fail http://127.0.0.1:8080/healthz
 
 Open the dashboard at `http://127.0.0.1:8080`. Change the published loopback port with `IOT_HTTP_PORT` when needed. The first build downloads pinned images and dependencies. The stack includes separate backend, gateway, simulator and frontend images, plus TimescaleDB, Mosquitto, Prometheus, Alertmanager and the alarm receiver scaffold.
 
-The stack script writes generated database and broker probe passwords to an ignored, owner-only `.env.stack`. Keep this file with the local deployment data volume because PostgreSQL reads the initialization password on first startup. The broker probe has read access only to its health topic. The ingestion milestone adds service and device credentials and topic permissions.
+The stack script writes generated database, broker and gateway credentials to an ignored, owner-only `.env.stack`. It adds missing registry credentials to existing files without replacing their database or broker probe passwords. Keep this file with the local deployment data volume because PostgreSQL reads the initialization password on first startup.
+
+Two one-shot Compose jobs create the separate database roles and run the Flyway registry migrations. The demo provisioner registers two tenants with overlapping sensor IDs and produces an MQTT ACL from their active assignments. Repeated provisioning preserves existing registry rows and status changes. The backend uses the restricted runtime role and the broker loads separate credentials and topic rules for the two gateways and two devices.
+
+To refresh the ACL after local registry changes, run the provisioner again and recreate the broker so it reads the new ACL and active principal list.
+
+```sh
+docker compose --env-file .env.stack --profile local run --rm registry-provision
+docker compose --env-file .env.stack --profile local up -d --no-deps --force-recreate mosquitto
+```
+
+The gateway refreshes both authorized snapshots from the backend every 30 seconds. It verifies each response's digest and assigned tenant and gateway before replacing its persistent cache. A failed refresh keeps the verified snapshot available during network loss. An explicit authentication rejection invalidates that tenant's cache.
 
 ## Check services and restart offline
 
-Compose waits for service health before reporting startup complete. Logs rotate at 20 MB with up to five files per container. Java readiness probes and metrics stay on the Docker networks. Nginx serves the dashboard and forwards `/api/` to the Java backend. The current backend scaffold exposes health and metrics, with application APIs and telemetry clients added in later milestones.
+Compose waits for service health before reporting startup complete. Logs rotate at 20 MB with up to five files per container. Java readiness probes and metrics stay on the Docker networks. Nginx serves the dashboard and forwards `/api/` to the Java backend. The backend serves health and metrics and has an authenticated internal registry endpoint. Browser APIs and telemetry clients arrive in later milestones.
 
 ```sh
 docker compose --env-file .env.stack --profile local logs --tail 100

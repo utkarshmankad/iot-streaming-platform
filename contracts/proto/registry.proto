@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package iot.registry.v1;
+option java_package = "iot.platform.registry.proto";
+option java_multiple_files = true;
+
+message RegistrySnapshot {
+  uint32 format_version = 1;
+  string tenant_id = 2;
+  string gateway_id = 3;
+  repeated RegistryDevice devices = 4;
+}
+
+message RegistryDevice {
+  string device_id = 1;
+  string broker_client_id = 2;
+  repeated RegistrySensor sensors = 3;
+}
+
+message RegistrySensor {
+  string sensor_id = 1;
+  string type_code = 2;
+  string unit = 3;
+  uint32 sampling_period_ms = 4;
+  repeated RegistrySchema accepted_schemas = 5;
+}
+
+message RegistrySchema {
+  uint32 version = 1;
+  string protobuf_contract = 2;
+  string validator_revision = 3;
+  double min_value = 4;
+  double max_value = 5;
+}
+
+// On-disk envelope for verifying the last-known-good snapshot.
+message CachedRegistry {
+  string etag = 1;
+  bytes body = 2;
+}

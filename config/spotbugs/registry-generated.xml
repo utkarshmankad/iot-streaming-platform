@@ -1,0 +1,5 @@
+<FindBugsFilter>
+    <Match>
+        <Class name="~iot\.platform\.registry\.proto\..*" />
+    </Match>
+</FindBugsFilter>

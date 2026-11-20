@@ -1,5 +1,7 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
 import com.github.spotbugs.snom.SpotBugsExtension
+import com.google.protobuf.gradle.ProtobufExtension
+import org.gradle.api.file.SourceDirectorySet
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
 import org.gradle.api.plugins.JavaPluginExtension
@@ -11,6 +13,7 @@ import org.springframework.boot.gradle.tasks.bundling.BootJar
 
 plugins {
     jacoco
+    id("com.google.protobuf") version "0.10.0" apply false
     id("com.github.spotbugs") version "6.5.13" apply false
     id("com.diffplug.spotless") version "8.11.0" apply false
     id("org.springframework.boot") version "4.1.2" apply false
@@ -38,6 +41,7 @@ configure(services) {
 
     extensions.configure<SpotlessExtension> {
         java {
+            target("src/**/*.java")
             googleJavaFormat("1.36.1")
         }
     }
@@ -51,6 +55,19 @@ configure(services) {
 
     val sourceSets = extensions.getByType<SourceSetContainer>()
     val mainSource = sourceSets.named("main").get()
+    val registryService = name == "backend" || name == "gateway"
+    if (registryService) {
+        apply(plugin = "com.google.protobuf")
+        extensions.configure<ProtobufExtension> {
+            protoc { artifact = "com.google.protobuf:protoc:4.36.2" }
+        }
+        (mainSource.extensions.getByName("proto") as SourceDirectorySet)
+            .srcDir(rootProject.file("contracts/proto"))
+        extensions.configure<SpotBugsExtension> {
+            excludeFilter.set(rootProject.file("config/spotbugs/registry-generated.xml"))
+        }
+    }
+
     val integrationSource = sourceSets.create("integrationTest") {
         compileClasspath += mainSource.output
         runtimeClasspath += mainSource.output
@@ -88,7 +105,15 @@ configure(services) {
         add("testImplementation", "org.junit.jupiter:junit-jupiter")
         add("testRuntimeOnly", "org.junit.platform:junit-platform-launcher")
         add("spotbugsPlugins", "com.h3xstream.findsecbugs:findsecbugs-plugin:1.14.0")
+        if (registryService) {
+            add("implementation", "com.google.protobuf:protobuf-java:4.36.2")
+        }
         if (name == "backend") {
+            add("implementation", "org.springframework.boot:spring-boot-starter-jdbc")
+            add("implementation", "org.springframework.boot:spring-boot-starter-flyway")
+            add("runtimeOnly", "org.flywaydb:flyway-database-postgresql")
+            add("runtimeOnly", "org.postgresql:postgresql")
+            add("integrationTestImplementation", "org.testcontainers:testcontainers-postgresql")
             add("testImplementation", "com.tngtech.archunit:archunit-junit5:1.5.1")
         }
     }
@@ -107,6 +132,7 @@ val coverageClasses = files(services.map { service ->
         .asFileTree.matching {
             // These three main methods only delegate startup to Spring Boot.
             exclude(
+                "iot/platform/registry/proto/**",
                 "iot/platform/backend/BackendApplication.class",
                 "iot/platform/gateway/GatewayApplication.class",
                 "iot/platform/simulator/SimulatorApplication.class",

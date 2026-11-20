@@ -1,0 +1,8 @@
+\set ON_ERROR_STOP on
+SELECT 'CREATE ROLE iot_migrate LOGIN NOSUPERUSER NOBYPASSRLS'
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'iot_migrate') \gexec
+SELECT 'CREATE ROLE iot_app LOGIN NOSUPERUSER NOBYPASSRLS'
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'iot_app') \gexec
+ALTER ROLE iot_migrate PASSWORD :'migrate_password';
+ALTER ROLE iot_app PASSWORD :'app_password';
+CREATE SCHEMA IF NOT EXISTS registry AUTHORIZATION iot_migrate;

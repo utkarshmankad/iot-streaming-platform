@@ -35,6 +35,10 @@ The edge gateway stores original readings in `gateway.sqlite` on its named volum
 
 The gateway uploads a tenant’s queue at 250 readings or when an eligible reading has waited a second. It preserves unconfirmed rows across backend outages and restarts, and it can resume with a verified cached registry while the backend is unreachable. The Java backend validates each entry and commits valid readings and their unique receipt identities in TimescaleDB. The gateway keeps a batch entry until it receives a matching terminal outcome.
 
+## Trend storage maintenance
+
+Flyway registers two TimescaleDB jobs that run once per minute. The regular job refreshes recent completed quarters and backfills older existing readings in bounded daily windows. The repair job retries historical bucket requests from the durable queue. Keep the TimescaleDB volume across restarts so both the published coverage and pending requests survive outages. The raw readings and receipt ledger retain their data throughout the soak.
+
 ## Check services and restart offline
 
 Compose waits for service health before reporting startup complete. Logs rotate at 20 MB with up to five files per container. Java readiness probes and metrics stay on the Docker networks. Nginx serves the dashboard and forwards `/api/` to the Java backend. The backend serves health and metrics and has an authenticated internal registry endpoint. Browser APIs arrive in later milestones.

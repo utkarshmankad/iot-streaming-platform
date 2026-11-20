@@ -14,7 +14,10 @@ const tenants = [
 async function mockDashboard(context, { signedIn = a } = {}) {
   let active = signedIn;
   let mode = 'normal';
+  let command;
+  let failSubmission = false;
   const calls = [];
+  const commandKeys = [];
   await context.route('**/api/v1/**', async (route) => {
     const request = route.request();
     const path = new URL(request.url());
@@ -45,13 +48,28 @@ async function mockDashboard(context, { signedIn = a } = {}) {
     const sensor = (sensorId, type, displayName) => ({
       sensorId, displayName: name + ' ' + displayName, type,
       unit: type === 'light' ? 'lux' : '°C', samplingPeriodMs: 1000,
-      desiredEnabled: true, confirmedEnabled: null, connectivity: 'unknown',
-      sampleStatus: 'fresh', lastObservedAt: stamp, lastHeartbeatAt: null,
+      desiredEnabled: active === a && sensorId === shared ? command?.requestedEnabled ?? true : true,
+      confirmedEnabled: null, connectivity: sensorId === shared ? 'offline' : 'unknown',
+      sampleStatus: 'stale', lastObservedAt: stamp, lastHeartbeatAt: null,
+      latestCommand: active === a && sensorId === shared ? command ?? null : null,
     });
     if (path.pathname.endsWith('/sensors')) {
       return path.searchParams.has('cursor')
         ? json(200, { items: [sensor(second, 'temperature', 'outdoor')], nextCursor: null })
         : json(200, { items: [sensor(shared, 'temperature', 'indoor'), sensor(light, 'light', 'light')], nextCursor: 'fixture-page' });
+    }
+    if (path.pathname.endsWith(`/sensors/${shared}/commands`) && request.method() === 'POST') {
+      const headers = request.headers();
+      if (active !== a || headers['x-iot-tenant'] !== a || headers['x-csrf-token'] !== 'test-csrf') {
+        return problem(403, 'FORBIDDEN', 'Control is unavailable.');
+      }
+      commandKeys.push(headers['idempotency-key']);
+      command ??= { commandId: shared, sensorId: shared, version: 1,
+        requestedEnabled: request.postDataJSON().enabled, status: 'pending', createdAt: stamp, expiresAt: stamp };
+      return failSubmission ? problem(503, 'SERVICE_UNAVAILABLE', 'Response unavailable.') : json(202, command);
+    }
+    if (path.pathname.endsWith(`/commands/${shared}`) && active === a && command) {
+      return json(200, { ...command, confirmedEnabled: null, resolvedAt: command.status === 'expired' ? stamp : null });
     }
     if (path.pathname.endsWith('/trends')) {
       calls.push({ tenant: active, query: path.searchParams });
@@ -79,7 +97,8 @@ async function mockDashboard(context, { signedIn = a } = {}) {
     }
     return route.abort();
   });
-  return { calls, setMode: (value) => { mode = value; }, expireSession: () => { active = null; } };
+  return { calls, commandKeys, setMode: (value) => { mode = value; }, expireSession: () => { active = null; },
+    failSubmission: (value) => { failSubmission = value; }, setCommandStatus: (value) => { command.status = value; } };
 }
 
 async function signIn(page, username, password) {
@@ -176,6 +195,33 @@ test('polls live data, backs off an outage and shows freshness and no-data state
   await page.clock.fastForward(16_000);
   await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Sensor trends' })).toHaveCount(0);
+});
+
+test('retries a lost command response, shows offline expiry and hides viewer controls', async ({ page, context }) => {
+  const mock = await mockDashboard(context);
+  mock.failSubmission(true);
+  await page.goto('/');
+  const sensor = page.getByRole('row', { name: /North indoor/ });
+  await expect(sensor.getByText('Offline', { exact: true })).toBeVisible();
+  await expect(sensor.getByText('Stale', { exact: true })).toBeVisible();
+  await sensor.getByRole('button', { name: 'Pause North indoor' }).click();
+  await expect(sensor.getByRole('alert')).toContainText('Retry uses the same request');
+  mock.failSubmission(false);
+  await sensor.getByRole('button', { name: 'Retry command for North indoor' }).click();
+  await expect(sensor.getByText('Pending · sensor offline', { exact: true })).toBeVisible();
+  await expect(sensor.getByRole('button')).toBeDisabled();
+  expect(mock.commandKeys).toHaveLength(2);
+  expect(mock.commandKeys[0]).toBeTruthy();
+  expect(mock.commandKeys[1]).toBe(mock.commandKeys[0]);
+  mock.setCommandStatus('expired');
+  await expect(sensor.getByText('Command expired', { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(sensor.getByText('Command expired', { exact: true })).toBeVisible();
+  await page.getByLabel('Tenant', { exact: true }).selectOption(b);
+  const viewer = page.getByRole('row', { name: /South indoor/ });
+  await expect(viewer).toBeVisible();
+  await expect(viewer.getByRole('button')).toHaveCount(0);
+  await expect(viewer.getByText('Command expired', { exact: true })).toHaveCount(0);
 });
 
 test('renders fresh Compose telemetry through Nginx at every resolution', async ({ page }) => {

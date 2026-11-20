@@ -2,6 +2,7 @@ package iot.platform.backend.browser;
 
 import iot.platform.backend.analytics.TrendStorage;
 import iot.platform.backend.registry.OperatorTenantAuthorizer;
+import iot.platform.telemetry.HeartbeatBatchLimits;
 import jakarta.annotation.PostConstruct;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -59,9 +60,12 @@ class BrowserReads {
                 """
         SELECT s.sensor_id, s.display_name, s.type_code, t.canonical_unit, s.sampling_period_ms,
                coalesce(st.desired_enabled, true) AS desired_enabled, st.confirmed_enabled,
-               st.last_heartbeat_at, st.last_observed_at
+               st.last_heartbeat_at, st.last_observed_at,
+               c.command_id,c.version,c.requested_enabled,c.status AS command_status,c.expires_at
         FROM registry.sensors s JOIN registry.sensor_types t USING (type_code)
         LEFT JOIN registry.sensor_state st USING (tenant_id, sensor_id)
+        LEFT JOIN registry.commands c ON c.tenant_id=s.tenant_id AND c.sensor_id=s.sensor_id
+          AND c.version=st.command_version
         WHERE s.tenant_id=:tenant AND s.status='active'
           AND (CAST(:after AS uuid) IS NULL OR s.sensor_id > CAST(:after AS uuid))
         ORDER BY s.sensor_id LIMIT :limit
@@ -80,7 +84,8 @@ class BrowserReads {
                         row.getBoolean("desired_enabled"),
                         row.getObject("confirmed_enabled", Boolean.class),
                         instant(row, "last_observed_at"),
-                        instant(row, "last_heartbeat_at")))
+                        instant(row, "last_heartbeat_at"),
+                        latestCommand(row, now)))
             .list();
     boolean more = found.size() > limit;
     var page = more ? found.subList(0, limit) : found;
@@ -181,7 +186,9 @@ class BrowserReads {
     String connectivity =
         heartbeat == null
             ? "unknown"
-            : heartbeat.isAfter(now.minusSeconds(15)) ? "online" : "offline";
+            : heartbeat.isAfter(now.minusMillis(HeartbeatBatchLimits.OFFLINE_MS))
+                ? "online"
+                : "offline";
     String samples;
     if (Boolean.FALSE.equals(sensor.confirmedEnabled())) {
       samples = "paused";
@@ -201,7 +208,21 @@ class BrowserReads {
         connectivity,
         samples,
         lastSeen,
-        heartbeat);
+        heartbeat,
+        sensor.latestCommand());
+  }
+
+  private static CommandSummary latestCommand(ResultSet row, Instant now) throws SQLException {
+    var id = row.getObject("command_id", UUID.class);
+    if (id == null) {
+      return null;
+    }
+    String status = row.getString("command_status");
+    if ("pending".equals(status) && !now.isBefore(instant(row, "expires_at"))) {
+      status = "expired";
+    }
+    return new CommandSummary(
+        id, row.getLong("version"), row.getBoolean("requested_enabled"), status);
   }
 
   private static TrendSeries series(
@@ -263,7 +284,8 @@ class BrowserReads {
       boolean desiredEnabled,
       Boolean confirmedEnabled,
       Instant lastObservedAt,
-      Instant lastHeartbeatAt) {}
+      Instant lastHeartbeatAt,
+      CommandSummary latestCommand) {}
 
   private record SeriesIdentity(UUID sensorId, String type, String unit) {}
 
@@ -280,7 +302,10 @@ class BrowserReads {
       String connectivity,
       String sampleStatus,
       Instant lastObservedAt,
-      Instant lastHeartbeatAt) {}
+      Instant lastHeartbeatAt,
+      CommandSummary latestCommand) {}
+
+  record CommandSummary(UUID commandId, long version, boolean requestedEnabled, String status) {}
 
   record TrendView(
       Instant from, Instant to, String bucket, Instant generatedAt, List<TrendSeries> series) {}

@@ -142,3 +142,9 @@ tbody th span { display: block; margin-top: .15rem; font-weight: 500; font-size:
   .filters, .sensor-filter { width: 100%; }
   .resolutions span { min-height: 2.45rem; padding-inline: .45rem; font-size: .875rem; }
 }
+
+.sensor-control { display: grid; justify-items: start; gap: .25rem; }
+.sampling-button { min-inline-size: 5.4rem; }
+.sensor-control > span:empty { display: none; }
+.sensor-control > span { font-size: .875rem; color: var(--muted); }
+.sensor-control > .control-error { color: #7c2534; max-inline-size: 15rem; white-space: normal; }

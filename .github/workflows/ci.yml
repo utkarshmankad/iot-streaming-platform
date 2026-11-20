@@ -325,6 +325,7 @@ jobs:
           path: |
             build/ci/compose.log
             build/ci/browser.xml
+            build/ci/command-latency.txt
             build/ci/faults/
           if-no-files-found: ignore
           retention-days: 14

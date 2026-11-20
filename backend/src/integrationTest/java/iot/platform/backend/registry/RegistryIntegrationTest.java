@@ -111,8 +111,12 @@ class RegistryIntegrationTest {
 
           sql.execute(
               "UPDATE registry.sensor_schema_versions SET accepted=false WHERE type_code='temperature'");
-          sql.execute(
-              "UPDATE registry.sensors SET status='disabled' WHERE tenant_id='" + TENANT_B + "'");
+          try (var disable =
+              owner.prepareStatement(
+                  "UPDATE registry.sensors SET status='disabled' WHERE tenant_id=?")) {
+            disable.setObject(1, TENANT_B);
+            disable.executeUpdate();
+          }
           var changed = request(http, endpoint, TOKEN_A, etag);
           assertEquals(200, changed.statusCode());
           assertEquals(
@@ -126,8 +130,12 @@ class RegistryIntegrationTest {
               RegistrySnapshot.parseFrom(request(http, endpoint, TOKEN_B, null).body())
                   .getDevices(0)
                   .getSensorsCount());
-          sql.execute(
-              "UPDATE registry.gateways SET status='disabled' WHERE tenant_id='" + TENANT_B + "'");
+          try (var disable =
+              owner.prepareStatement(
+                  "UPDATE registry.gateways SET status='disabled' WHERE tenant_id=?")) {
+            disable.setObject(1, TENANT_B);
+            disable.executeUpdate();
+          }
           assertEquals(401, request(http, endpoint, TOKEN_B, null).statusCode());
           provision(database.getJdbcUrl(), acl);
           assertFalse(Files.readString(acl).contains("user device-b"));

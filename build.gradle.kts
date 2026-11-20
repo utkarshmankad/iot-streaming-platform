@@ -1,6 +1,7 @@
 import com.diffplug.gradle.spotless.SpotlessExtension
 import com.github.spotbugs.snom.SpotBugsExtension
 import com.google.protobuf.gradle.ProtobufExtension
+import info.solidsoft.gradle.pitest.PitestPluginExtension
 import org.gradle.api.file.SourceDirectorySet
 import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
 import org.gradle.testing.jacoco.tasks.JacocoReport
@@ -8,6 +9,7 @@ import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.tasks.SourceSetContainer
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
+import org.gradle.jvm.toolchain.JavaToolchainService
 import org.gradle.jvm.toolchain.JvmVendorSpec
 import org.springframework.boot.gradle.tasks.bundling.BootJar
 
@@ -17,9 +19,31 @@ plugins {
     id("com.github.spotbugs") version "6.5.13" apply false
     id("com.diffplug.spotless") version "8.11.0" apply false
     id("org.springframework.boot") version "4.1.2" apply false
+    id("info.solidsoft.pitest") version "1.19.0" apply false
 }
 
 val services = listOf(project(":backend"), project(":gateway"), project(":simulator"), project(":contracts"))
+
+data class MutationScope(val classes: Set<String>, val tests: Set<String>)
+
+val mutationScopes = mapOf(
+    "backend" to MutationScope(
+        setOf("iot.platform.backend.ingest.TelemetryIngest", "iot.platform.backend.control.CommandStore\$Command"),
+        setOf("iot.platform.backend.ingest.TelemetryFingerprintTest", "iot.platform.backend.control.CommandTimingTest"),
+    ),
+    "contracts" to MutationScope(
+        setOf("iot.platform.telemetry.TelemetryValidation", "iot.platform.control.CommandProtocol"),
+        setOf("iot.platform.telemetry.TelemetryValidationTest", "iot.platform.control.CommandProtocolTest"),
+    ),
+    "gateway" to MutationScope(
+        setOf("iot.platform.gateway.ingest.GatewaySpool", "iot.platform.gateway.ingest.GatewayDelivery"),
+        setOf("iot.platform.gateway.ingest.GatewaySpoolTest", "iot.platform.gateway.ingest.GatewayDeliveryTest"),
+    ),
+    "simulator" to MutationScope(
+        setOf("iot.platform.simulator.payload.SimulatorOutbox"),
+        setOf("iot.platform.simulator.payload.SimulatorOutboxTest"),
+    ),
+)
 
 configure(services) {
     apply(plugin = "java")
@@ -56,6 +80,24 @@ configure(services) {
     }
     extensions.configure<SpotBugsExtension> {
         toolVersion.set("4.10.5")
+    }
+
+    val mutationScope = mutationScopes.getValue(name)
+    apply(plugin = "info.solidsoft.pitest")
+    val mutationJava = extensions.getByType<JavaToolchainService>().launcherFor {
+        languageVersion.set(JavaLanguageVersion.of(25))
+        vendor.set(JvmVendorSpec.ADOPTIUM)
+    }
+    extensions.configure<PitestPluginExtension> {
+        pitestVersion.set("1.30.1")
+        junit5PluginVersion.set("1.2.3")
+        targetClasses.set(mutationScope.classes)
+        targetTests.set(mutationScope.tests)
+        jvmPath.set(mutationJava.map { it.executablePath })
+        threads.set(2)
+        failWhenNoMutations.set(true)
+        outputFormats.set(setOf("HTML", "XML"))
+        timestampedReports.set(false)
     }
 
     val sourceSets = extensions.getByType<SourceSetContainer>()
@@ -135,6 +177,12 @@ configure(services) {
 
 repositories {
     mavenCentral()
+}
+
+tasks.register("mutationChecks") {
+    group = "verification"
+    description = "Runs targeted PIT mutation checks and writes per-module HTML and XML reports."
+    dependsOn(mutationScopes.keys.map { ":$it:pitest" })
 }
 
 jacoco {

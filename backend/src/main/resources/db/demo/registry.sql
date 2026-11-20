@@ -25,15 +25,19 @@ FROM registry.gateways WHERE credential_ref IN ('gateway-a', 'gateway-b')
 ON CONFLICT (tenant_id, device_id) DO NOTHING;
 
 INSERT INTO registry.sensors (tenant_id, sensor_id, device_id, type_code, display_name)
-SELECT device.tenant_id, fixture.sensor_id::uuid, device.device_id, fixture.type_code, kind.description
-FROM registry.devices device CROSS JOIN (VALUES
-    ('00000000-0000-4000-8000-000000000001', 'temperature'),
-    ('00000000-0000-4000-8000-000000000002', 'humidity'),
-    ('00000000-0000-4000-8000-000000000003', 'pressure'),
-    ('00000000-0000-4000-8000-000000000004', 'pm25'),
-    ('00000000-0000-4000-8000-000000000005', 'light'),
-    ('00000000-0000-4000-8000-000000000006', 'oxygen')
-) fixture(sensor_id, type_code)
+SELECT device.tenant_id,
+    ('00000000-0000-4000-8000-' || lpad((slot.number * 6 + fixture.ordinal)::text, 12, '0'))::uuid,
+    device.device_id, fixture.type_code, kind.description
+FROM registry.devices device
+CROSS JOIN generate_series(0, current_setting('iot.demo_streams_per_type')::integer - 1) slot(number)
+CROSS JOIN (VALUES
+    (1, 'temperature'),
+    (2, 'humidity'),
+    (3, 'pressure'),
+    (4, 'pm25'),
+    (5, 'light'),
+    (6, 'oxygen')
+) fixture(ordinal, type_code)
 JOIN registry.sensor_types kind ON kind.type_code = fixture.type_code
 WHERE device.mqtt_principal_ref IN ('device-a','device-b')
 ON CONFLICT (tenant_id, sensor_id) DO NOTHING;

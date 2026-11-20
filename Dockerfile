@@ -6,7 +6,7 @@ COPY backend/ backend/
 COPY gateway/ gateway/
 COPY simulator/ simulator/
 COPY perf/build.gradle.kts perf/
-COPY contracts/proto/ contracts/proto/
+COPY contracts/ contracts/
 RUN ./gradlew :backend:bootJar :gateway:bootJar :simulator:bootJar --no-daemon
 
 FROM eclipse-temurin:25.0.5_8-jre-alpine

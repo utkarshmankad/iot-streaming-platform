@@ -7,17 +7,19 @@ case "${1:-}" in
         credentials=.env.stack
         default_port=8080
         ;;
-    test)
+    test|pilot)
         project=iot-platform-ci
         credentials=.env.test
         default_port=18080
         ;;
     *)
-        printf '%s\n' 'Usage: scripts/stack.sh {local|test} {up|build|up-built|offline-up|status|down|reset}' >&2
+        printf '%s\n' 'Usage: scripts/stack.sh {local|test|pilot} {up|build|up-built|offline-up|status|down|reset}' >&2
         exit 2
         ;;
 esac
 profile=$1
+deployment=$profile
+if [ "$deployment" = pilot ]; then profile=test; fi
 action=${2:-}
 
 cd "$(dirname "$0")/.."
@@ -66,7 +68,7 @@ case "$action" in
     down) set -- down ;;
     reset) set -- down --volumes ;;
     *)
-        printf '%s\n' 'Usage: scripts/stack.sh {local|test} {up|build|up-built|offline-up|status|down|reset}' >&2
+        printf '%s\n' 'Usage: scripts/stack.sh {local|test|pilot} {up|build|up-built|offline-up|status|down|reset}' >&2
         exit 2
         ;;
 esac
@@ -83,7 +85,7 @@ if [ -f "$backup_config" ]; then
     IOT_BACKUP_DIR=$(sed -n '1p' "$backup_config")
     IOT_BACKUP_TARGET_ID=$(sed -n '2p' "$backup_config")
     export IOT_BACKUP_DIR IOT_BACKUP_TARGET_ID
-    exec docker compose --env-file "$credentials" --project-name "$project" --profile "$profile" \
-        -f compose.yaml -f compose.backup.yaml "$@"
+    set -- -f compose.backup.yaml "$@"
 fi
+if [ "$deployment" = pilot ]; then set -- -f compose.pilot-fault.yaml "$@"; fi
 exec docker compose --env-file "$credentials" --project-name "$project" --profile "$profile" -f compose.yaml "$@"

@@ -7,6 +7,8 @@ COPY frontend/src/ src/
 RUN npm run build
 
 FROM nginx:1.30.7-alpine3.24
+# Install the fix for CVE-2026-86144 in the inherited XML library.
+RUN apk add --no-cache 'libxml2>=2.13.9-r3'
 COPY config/nginx/frontend.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /workspace/dist/ /usr/share/nginx/html/
 EXPOSE 8080

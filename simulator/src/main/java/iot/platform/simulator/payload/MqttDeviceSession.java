@@ -138,7 +138,7 @@ final class MqttDeviceSession implements AutoCloseable {
     return applied == null ? 0 : applied.getVersion();
   }
 
-  void flush(SimulatorOutbox outbox, long now) throws SQLException {
+  void flush(SimulatorOutbox outbox, long now, boolean withholdCommandAck) throws SQLException {
     for (int handled = 0; handled < 256; handled++) {
       var receipt = receipts.poll();
       if (receipt == null) {
@@ -160,13 +160,15 @@ final class MqttDeviceSession implements AutoCloseable {
     if (!ready(now)) {
       return;
     }
-    var acknowledgments = announce.iterator();
-    for (int sent = 0; sent < 16 && acknowledgments.hasNext(); sent++) {
-      var stream = acknowledgments.next();
-      if (!publish(stream.topic("command-ack"), state.get(stream).toByteArray(), 1)) {
-        break;
+    if (!withholdCommandAck) {
+      var acknowledgments = announce.iterator();
+      for (int sent = 0; sent < 16 && acknowledgments.hasNext(); sent++) {
+        var stream = acknowledgments.next();
+        if (!publish(stream.topic("command-ack"), state.get(stream).toByteArray(), 1)) {
+          break;
+        }
+        acknowledgments.remove();
       }
-      acknowledgments.remove();
     }
     int available = Math.min(32, 64 - client.getPendingTokens().length);
     if (available <= 0) {

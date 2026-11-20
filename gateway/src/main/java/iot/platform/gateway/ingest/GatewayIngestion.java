@@ -20,6 +20,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -41,7 +42,8 @@ final class GatewayIngestion {
       @Value("${IOT_GATEWAY_MQTT_A_PASSWORD:}") String passwordA,
       @Value("${IOT_GATEWAY_MQTT_B_PASSWORD:}") String passwordB,
       @Value("${IOT_GATEWAY_SPOOL:/var/lib/iot/gateway.sqlite}") Path database,
-      @Value("${IOT_GATEWAY_MAX_BYTES_PER_TENANT:5000000000}") long limit)
+      @Value("${IOT_GATEWAY_MAX_BYTES_PER_TENANT:5000000000}") long limit,
+      Environment environment)
       throws Exception {
     var credentials = List.of(passwordA, passwordB);
     var names = List.of("gateway-a", "gateway-b");
@@ -62,7 +64,8 @@ final class GatewayIngestion {
             new Channel(
                 tenant,
                 mqtt,
-                new GatewayIngress(spool, registry, mqtt),
+                new GatewayIngress(
+                    spool, registry, mqtt, environment.matchesProfiles("fault-test")),
                 new GatewayDelivery(spool, registry, http, upload),
                 snapshot));
         registerMetrics(meters, tenant.toString(), snapshot);

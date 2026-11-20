@@ -1,0 +1,17 @@
+services:
+  simulator:
+    environment:
+      SPRING_PROFILES_ACTIVE: simulate,fault-test
+      IOT_SIM_SEED: "20260301"
+  gateway:
+    environment:
+      SPRING_PROFILES_ACTIVE: registry,fault-test
+  registry-provision:
+    environment:
+      IOT_REGISTRY_STREAMS_PER_TYPE: "1"
+  mosquitto:
+    volumes:
+      - type: tmpfs
+        target: /mosquitto/data
+        tmpfs:
+          mode: 0777

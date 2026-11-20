@@ -19,13 +19,20 @@ import java.util.UUID;
 final class SimulatorOutbox implements AutoCloseable {
   private final Connection db;
   private final long limitPerTenant;
+  private final boolean faultTrace;
 
-  private SimulatorOutbox(Connection db, long limitPerTenant) {
+  private SimulatorOutbox(Connection db, long limitPerTenant, boolean faultTrace) {
     this.db = db;
     this.limitPerTenant = limitPerTenant;
+    this.faultTrace = faultTrace;
   }
 
   static SimulatorOutbox open(Path path, long limitPerTenant) throws IOException, SQLException {
+    return open(path, limitPerTenant, false);
+  }
+
+  static SimulatorOutbox open(Path path, long limitPerTenant, boolean faultTrace)
+      throws IOException, SQLException {
     if (limitPerTenant <= 0) {
       throw new IllegalArgumentException("Outbox capacity must be positive");
     }
@@ -62,11 +69,21 @@ final class SimulatorOutbox implements AutoCloseable {
               accepted INTEGER NOT NULL DEFAULT 0, rejected INTEGER NOT NULL DEFAULT 0
           )
           """);
+      if (faultTrace) {
+        sql.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fault_events (
+              tenant TEXT NOT NULL, sensor TEXT NOT NULL, event TEXT NOT NULL,
+              observed_ms INTEGER NOT NULL, outcome TEXT NOT NULL,
+              PRIMARY KEY (tenant, sensor, event)
+            )
+            """);
+      }
     } catch (SQLException failure) {
       db.close();
       throw failure;
     }
-    return new SimulatorOutbox(db, limitPerTenant);
+    return new SimulatorOutbox(db, limitPerTenant, faultTrace);
   }
 
   void generate(Collection<Intent> events, long seed) throws SQLException {
@@ -114,6 +131,9 @@ final class SimulatorOutbox implements AutoCloseable {
               }
             }
 
+            if (faultTrace) {
+              traceGeneration(tenant, sensor, event.getEventId(), intent.observedMs(), stored);
+            }
             try (var update =
                 db.prepareStatement(
                     """
@@ -221,6 +241,9 @@ final class SimulatorOutbox implements AutoCloseable {
             }
           }
           boolean rejected = outcome == TelemetryReceipt.Outcome.REJECTED;
+          if (faultTrace) {
+            traceReceipt(tenant, stream.sensorId().toString(), receipt.getEventId(), rejected);
+          }
           try (var update =
               db.prepareStatement(
                   """
@@ -235,6 +258,32 @@ final class SimulatorOutbox implements AutoCloseable {
           }
           return true;
         });
+  }
+
+  private void traceGeneration(
+      String tenant, String sensor, String event, long observedMs, boolean queued)
+      throws SQLException {
+    try (var entry = db.prepareStatement("INSERT INTO fault_events VALUES (?, ?, ?, ?, ?)")) {
+      entry.setString(1, tenant);
+      entry.setString(2, sensor);
+      entry.setString(3, event);
+      entry.setLong(4, observedMs);
+      entry.setString(5, queued ? "pending" : "dropped");
+      entry.executeUpdate();
+    }
+  }
+
+  private void traceReceipt(String tenant, String sensor, String event, boolean rejected)
+      throws SQLException {
+    try (var update =
+        db.prepareStatement(
+            "UPDATE fault_events SET outcome=? WHERE tenant=? AND sensor=? AND event=?")) {
+      update.setString(1, rejected ? "rejected" : "accepted");
+      update.setString(2, tenant);
+      update.setString(3, sensor);
+      update.setString(4, event);
+      update.executeUpdate();
+    }
   }
 
   Stats stats(UUID tenant) throws SQLException {

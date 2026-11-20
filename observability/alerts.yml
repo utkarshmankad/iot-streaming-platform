@@ -300,3 +300,32 @@ groups:
         annotations:
           summary: "The broker metrics collector is unavailable"
           runbook: "docs/local-deployment.md#alarms-and-metrics"
+      - alert: WalArchiveOverdue
+        expr: iot_wal_oldest_pending_seconds > 0 and time() - iot_wal_oldest_pending_seconds > 900
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: backup
+        annotations:
+          summary: "A completed WAL segment has been pending archive for 15 minutes"
+          runbook: "docs/recovery.md"
+      - alert: BackupTargetUnavailable
+        expr: iot_backup_target_available == 0
+        for: 5m
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: backup
+        annotations:
+          summary: "The configured local backup mount is unavailable"
+          runbook: "docs/recovery.md"
+      - alert: BackupTargetStorageLow
+        expr: iot_backup_available_bytes < 5e9
+        for: 1m
+        keep_firing_for: 30s
+        labels:
+          severity: critical
+          stage: backup
+        annotations:
+          summary: "The backup drive has less than 5 GB free"
+          runbook: "docs/recovery.md"

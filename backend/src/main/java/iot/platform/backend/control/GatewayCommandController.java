@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
 import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpHeaders;
@@ -29,16 +30,22 @@ import org.springframework.web.bind.annotation.RestController;
 class GatewayCommandController {
   private final GatewayAccess access;
   private final CommandStore store;
+  private final boolean restoreHold;
 
-  GatewayCommandController(GatewayAccess access, CommandStore store) {
+  GatewayCommandController(
+      GatewayAccess access,
+      CommandStore store,
+      @Value("${IOT_CONTROL_RESTORE_HOLD:false}") boolean restoreHold) {
     this.access = access;
     this.store = store;
+    this.restoreHold = restoreHold;
   }
 
   @GetMapping(value = "/pending", produces = CommandProtocol.CONTENT_TYPE)
   @Transactional(timeout = 5)
   public ResponseEntity<byte[]> pending(
       @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String header) {
+    if (restoreHold) return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
     return access
         .authorize(GatewayAccess.bearerToken(header))
         .map(
@@ -53,6 +60,7 @@ class GatewayCommandController {
       @PathVariable UUID id,
       HttpServletRequest request)
       throws IOException {
+    if (restoreHold) return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
     var assignment = access.authorize(GatewayAccess.bearerToken(header));
     if (assignment.isEmpty()) {
       return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();

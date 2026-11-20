@@ -54,7 +54,7 @@ Prometheus keeps 30 days of metrics subject to the 8 GB size cap. Set `IOT_STACK
 | Database, trends or controls | Check TimescaleDB, aggregate refresh and the command relay. Verify successful commits and new samples after recovery. |
 | Storage or backup | Check Docker and host free space. Reconnect the independent backup target and verify checksums and the last verified backup time. |
 
-A backup job can publish its most recent verified UTC epoch with `python3 scripts/observe.py local backup-status --verified-epoch <epoch>`. Use `--checksum-failed` to report a failed verification while preserving the last verified timestamp. The automatic backup job that publishes these signals is scheduled in M3.4.
+A backup job can publish its most recent verified UTC epoch with `python3 scripts/observe.py local backup-status --verified-epoch <epoch>`. Use `--checksum-failed` to report a failed verification while preserving the last verified timestamp. The [local recovery runbook](recovery.md) covers daily backup automation, WAL archival and isolated recovery.
 
 ## Inspect the gateway spool
 

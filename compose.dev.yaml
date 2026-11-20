@@ -2,7 +2,7 @@ name: iot-dev
 
 services:
   timescaledb:
-    image: timescale/timescaledb:2.27.0-pg17
+    image: timescale/timescaledb:2.32.0-pg17
     environment:
       POSTGRES_DB: iot_dev
       POSTGRES_USER: iot_dev

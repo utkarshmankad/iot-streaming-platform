@@ -1,4 +1,4 @@
-FROM node:24.22.2-alpine AS build
+FROM node:26.13.1-alpine AS build
 WORKDIR /workspace
 COPY frontend/package.json frontend/package-lock.json frontend/.npmrc ./
 RUN npm install --global npm@11.19.1 && npm ci --ignore-scripts

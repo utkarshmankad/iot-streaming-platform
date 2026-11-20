@@ -146,7 +146,7 @@ public class DashboardSimulation extends Simulation {
     var output = Path.of(System.getenv("IOT_PERF_SNAPSHOTS")).resolve(moment);
     try {
       var process =
-          new ProcessBuilder("bash", System.getenv("IOT_PERF_SCRIPT"), "snapshot")
+          new ProcessBuilder("/bin/bash", System.getenv("IOT_PERF_SCRIPT"), "snapshot")
               .redirectOutput(output.toFile())
               .redirectError(ProcessBuilder.Redirect.INHERIT)
               .start();

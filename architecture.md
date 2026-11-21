@@ -357,7 +357,7 @@ The short telemetry suite uses a disposable Compose project and separate authent
 | M1 | Add tenant identities and fixtures, telemetry schemas, deterministic simulator, SQLite queues, database migrations and idempotent ingest. Verify duplicate and isolation invariants before load testing. |
 | M2 | Add continuous aggregates, tail queries, historical bucket repair and React trends. Measure all four resolutions under concurrent ingest. |
 | M3 | Add acknowledged sensor controls, observability rules, the alarm ledger, failure injection, backup automation and a restore drill. |
-| M4 | Run calibration, 24-hour pilot and 15 active workload days. Record hardware, versions, configuration, interruptions and observed limits. |
+| M4 | Run the [one-hour calibration](docs/calibration.md), 24-hour pilot and 15 active workload days. Record hardware, versions, configuration, interruptions and observed limits. |
 
 Use `backend/`, `gateway/`, `simulator/`, `contracts/`, `frontend/`, `perf/` and `scripts/`. Keep migration ownership with the backend. Store repeatable Compose commands and failure drills in the runbook. Verify all spec acceptance IDs through tests or experiment evidence. Apply the documented protected-trunk and squash-merge policy once the GitHub Actions gate is verified. [Invoice Intel CI policy](https://github.com/utkarshmankad/invoice-intel/blob/c62b77ab8dccabffa43323ac5ef5dc7573e9a50f/docs/ci.md)
 
@@ -393,3 +393,4 @@ Record changes to design decisions, interfaces or operational behavior here in t
 | M3.4 backup and recovery tooling | This revision | Added encrypted mount registration, verified physical backups and WAL checkpoints, SQLite online snapshots, isolated replay with a fresh control generation, and separate RPO and replay evidence. |
 | FU-01 nightly mutation testing | This revision | Added scheduled PIT checks for ingress, schema validation, command timing, and durable queue and control state. Published per-module reports for 30 days. |
 | M3.5 fault verification and pilot profile | This revision | Added browser-visible silence transitions, delayed aggregate repair, a withheld command ACK and replay test, and a separate synthetic pilot profile with identity reconciliation and outage instructions. |
+| M4.1 calibration runner | This revision | Added isolated one-hour sampling of committed payload sizes and local resources, separate SQLite backlog probes, and projected database, archive and queue capacity for the pilot. |

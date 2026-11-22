@@ -4,10 +4,10 @@ Run FT-01G through FT-01J against a fresh synthetic Compose project on the lapto
 
 ## Start and record a case
 
-The pilot uses the disposable `iot-platform-ci` project so the existing `test` monitoring and recovery commands can inspect it. From the repository root, check `docker compose ls --all` and `docker volume ls --filter label=com.docker.compose.project=iot-platform-ci` for any previous test or pilot state. Start with fresh volumes and choose a unique evidence directory. The normal laptop deployment lives in `iot-platform-local`.
+The pilot uses the disposable `iot-platform-ci` project so the existing `test` monitoring and recovery commands can inspect it. From the repository root, check `docker compose ls --all` and `docker volume ls --filter label=com.docker.compose.project=iot-platform-ci` for any previous test or pilot state. Start with fresh volumes and choose a unique evidence directory. The normal laptop deployment lives in `iot-platform-local`. For the steady pilot and FT-01G, use the M4.1 calibrated setting of 10 streams per type per tenant and seed `20260301`.
 
 ```sh
-./scripts/stack.sh pilot up
+IOT_STACK_SIM_STREAMS_PER_TYPE=10 IOT_STACK_SIM_SEED=20260301 ./scripts/stack.sh pilot up
 ./scripts/stack.sh pilot status
 ```
 
@@ -44,11 +44,11 @@ The rules and metrics exports show queue depth and age, scrape status and alert 
 gateway=$(pilot_compose ps -q gateway)
 test -n "$gateway"
 docker network disconnect iot-platform-ci_gateway-api "$gateway"
-# Capture the backlog, age and alerts before reconnecting.
+# After 24 continuous hours, capture peak backlog, age and alerts before reconnecting.
 docker network connect --alias gateway iot-platform-ci_gateway-api "$gateway"
 ```
 
-Use a real multi-day disconnect or an overnight continuous disconnect plus a separate accelerated generation run that reaches the measured seven-day-equivalent backlog. Compare distinct event counts and bytes against the calibrated rate and record which path was exercised. After reconnect, keep live traffic running, measure commit and drain rates by tenant, verify the backlog drains within the target, and check historical bucket repair. Record planned capacity limits and any lost wall-clock time.
+Run this 24-hour partition separately from the 24-hour steady measurement. Keep the calibrated sensor fleet and MQTT active, and capture the start and end of the actual partition in UTC. Sample queue depth, bytes, oldest age and available disk throughout the window. Size each tested queue from the measured 24-hour on-disk growth plus 30% margin and confirm that replay and the simulator journal also fit. At 120 one-hertz streams, 24 uninterrupted hours is approximately 10.37 million readings or 0.975 GB of original payloads. Compare distinct counts and payload bytes by tenant with observations. After reconnect, keep live traffic running, measure commit and drain rates and elapsed drain time by tenant, and check that affected historical buckets repair. Reconcile accepted and committed events, record any gaps and check that backlog alerts resolve. [FT-01G architecture](../architecture.md#9-fault-injection-test-plan)
 
 **FT-01H · Tenant quota and storage limit.** Start a fresh profile with one stream per metric and tenant. Set a small gateway byte quota and a smaller simulator queue budget. Pause five tenant B streams using its operator account before disconnecting the gateway/backend network. Keep the sixth B stream enabled. At a measured payload size near 90 bytes, a 1,000,000-byte limit gives tenant A's six one-hertz streams enough time to reach 70% for five minutes before the queue is full. Adjust the quota against the measured rate. Record A's warning, critical and full events, its producer drop count if the outbox is exhausted, and B's remaining capacity and receipts. Repeat with a separately bounded scratch filesystem for gateway storage if available. Compare storage errors, spool survival and backpressure with the per-tenant quota case. Reconnect, confirm alarms resolve and reconcile intentional drops against the journal.
 

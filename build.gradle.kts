@@ -15,10 +15,10 @@ import org.springframework.boot.gradle.tasks.bundling.BootJar
 
 plugins {
     jacoco
-    id("com.google.protobuf") version "0.10.0" apply false
+    id("com.google.protobuf") version "0.10.1" apply false
     id("com.github.spotbugs") version "6.5.13" apply false
     id("com.diffplug.spotless") version "8.11.0" apply false
-    id("org.springframework.boot") version "4.1.2" apply false
+    id("org.springframework.boot") version "4.2.0" apply false
     id("info.solidsoft.pitest") version "1.19.0" apply false
 }
 
@@ -146,7 +146,7 @@ configure(services) {
     }
 
     dependencies {
-        add("implementation", platform("org.springframework.boot:spring-boot-dependencies:4.1.2"))
+        add("implementation", platform("org.springframework.boot:spring-boot-dependencies:4.2.0"))
         if (contractLibrary) {
             add("api", "com.google.protobuf:protobuf-java:4.36.2")
         } else {

@@ -1,7 +1,7 @@
 plugins {
     java
     id("com.diffplug.spotless")
-    id("io.gatling.gradle") version "3.16.0"
+    id("io.gatling.gradle") version "3.16.1"
 }
 
 repositories {

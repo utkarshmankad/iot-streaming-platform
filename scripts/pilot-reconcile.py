@@ -1,14 +1,35 @@
 #!/usr/bin/env python3
-"""Reconcile a drained pilot's simulator journal, raw readings, and receipt ledger."""
+"""Reconcile a stopped simulator's SQLite snapshot with raw readings and receipts."""
 
 import argparse
 import csv
 import json
+import shutil
 import sqlite3
 from collections import Counter, defaultdict
-from contextlib import closing
+from contextlib import closing, contextmanager
 from itertools import zip_longest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+
+
+@contextmanager
+def open_snapshot(snapshot):
+    snapshot = snapshot.resolve(strict=True)
+    wal = snapshot.with_name(snapshot.name + "-wal")
+    if not wal.exists() or wal.stat().st_size == 0:
+        # A checkpointed snapshot can be opened without SQLite's sidecar files.
+        with closing(sqlite3.connect(snapshot.as_uri() + "?mode=ro&immutable=1", uri=True)) as db:
+            yield db
+        return
+
+    # Opening an outstanding WAL requires writable space for SQLite's shared index.
+    with TemporaryDirectory(prefix="iot-reconcile-") as work:
+        copied = Path(work) / snapshot.name
+        shutil.copyfile(snapshot, copied)
+        shutil.copyfile(wal, copied.with_name(wal.name))
+        with closing(sqlite3.connect(copied.as_uri() + "?mode=ro", uri=True)) as db:
+            yield db
 
 
 def accepted_events(db, totals):
@@ -34,7 +55,8 @@ def reconcile(db, readings, receipts):
         raise ValueError("Simulator counters and journal list different tenants")
     for tenant, generated, accepted, dropped, rejected, pending in stats:
         expected_totals = Counter(accepted=accepted, dropped=dropped, rejected=rejected)
-        if pending or generated != sum(expected_totals.values()) or expected_totals != totals[tenant]:
+        if (pending or generated != sum(expected_totals.values())
+                or any(totals[tenant][outcome] != count for outcome, count in expected_totals.items())):
             raise ValueError(f"Simulator counters do not reconcile for {tenant}")
     return {"tenants": totals, "duplicate_rows": 0, "unexplained_losses": 0}
 
@@ -45,7 +67,7 @@ def main():
         parser.add_argument(file, type=Path)
     args = parser.parse_args()
     try:
-        with (closing(sqlite3.connect(args.simulator.resolve().as_uri() + "?mode=ro", uri=True)) as db,
+        with (open_snapshot(args.simulator) as db,
               args.readings.open(newline="", encoding="utf-8") as raw,
               args.receipts.open(newline="", encoding="utf-8") as ledger):
             report = reconcile(db, csv.reader(raw), csv.reader(ledger))

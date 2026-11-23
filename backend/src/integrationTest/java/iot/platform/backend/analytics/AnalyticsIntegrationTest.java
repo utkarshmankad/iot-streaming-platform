@@ -48,8 +48,9 @@ class AnalyticsIntegrationTest {
         var near = Instant.now().truncatedTo(ChronoUnit.HOURS);
         var historical = near.minus(Duration.ofDays(5));
         insert(owner, A, SENSOR, 1, historical, 12);
-        provision(url, "3");
+        provision(url, "8");
         disableJobs(owner);
+        provision(url, "9");
 
         try (var migration =
                 DriverManager.getConnection(url, "iot_migrate", "test-migrate-fixture");

@@ -112,7 +112,7 @@ services:
   timescaledb:
     profiles: [local, test]
     logging: *logging
-    image: timescale/timescaledb:2.27.0-pg17
+    image: timescale/timescaledb:2.32.1-pg17
     environment:
       POSTGRES_DB: iot
       POSTGRES_USER: iot
@@ -128,7 +128,7 @@ services:
   registry-roles:
     profiles: [local, test]
     logging: *logging
-    image: timescale/timescaledb:2.27.0-pg17
+    image: timescale/timescaledb:2.32.1-pg17
     command:
       - sh
       - -ec
@@ -172,7 +172,7 @@ services:
   mosquitto:
     profiles: [local, test]
     logging: *logging
-    image: eclipse-mosquitto:2.0.22
+    image: eclipse-mosquitto:2.0.23
     user: "1883:1883"
     environment:
       MQTT_HEALTH_PASSWORD: ${IOT_STACK_MQTT_HEALTH_PASSWORD:?Run ./scripts/stack.sh local up or test up}
@@ -216,7 +216,7 @@ services:
     init: true
     profiles: [local, test]
     logging: *logging
-    image: eclipse-mosquitto:2.0.22
+    image: eclipse-mosquitto:2.0.23
     user: "1883:1883"
     entrypoint: [/bin/sh, /run/broker-metrics.sh]
     environment:

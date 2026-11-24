@@ -227,6 +227,7 @@ groups:
       - alert: StorageHeadroom
         expr: |
           iot_alarm_storage_available_bytes < 10e9
+          or iot_gateway_spool_storage_available_bytes < 10e9
         for: 1m
         keep_firing_for: 30s
         labels:
@@ -234,11 +235,12 @@ groups:
           stage: storage
           condition: disk
         annotations:
-          summary: "Local Docker storage has less than 10 GB free"
+          summary: "Docker or gateway spool storage has less than 10 GB free"
           runbook: "docs/local-deployment.md#alarms-and-metrics"
       - alert: StorageHeadroomCritical
         expr: |
           iot_alarm_storage_available_bytes < 5e9
+          or iot_gateway_spool_storage_available_bytes < 5e9
         for: 30s
         keep_firing_for: 30s
         labels:
@@ -246,7 +248,7 @@ groups:
           stage: storage
           condition: disk
         annotations:
-          summary: "Local Docker storage has less than 5 GB free"
+          summary: "Docker or gateway spool storage has less than 5 GB free"
           runbook: "docs/local-deployment.md#alarms-and-metrics"
       - alert: WalArchivingFailures
         expr: |

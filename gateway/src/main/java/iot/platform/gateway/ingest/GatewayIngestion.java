@@ -8,6 +8,7 @@ import iot.platform.gateway.registry.GatewayRegistries;
 import iot.platform.telemetry.HeartbeatBatchLimits;
 import iot.platform.telemetry.TelemetryBatchLimits;
 import jakarta.annotation.PreDestroy;
+import java.io.File;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.nio.file.Path;
@@ -51,6 +52,10 @@ final class GatewayIngestion {
     var names = List.of("gateway-a", "gateway-b");
     var upload = registryEndpoint.resolve(TelemetryBatchLimits.PATH);
     spool = GatewaySpool.open(database, limit);
+    Gauge.builder(
+            "iot.gateway.spool.storage.available.bytes", database.toFile(), File::getUsableSpace)
+        .strongReference(true)
+        .register(meters);
     try {
       var scopes = registries.scopes();
       for (int index = 0; index < scopes.size(); index++) {

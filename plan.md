@@ -88,6 +88,8 @@ Record validated work discovered during implementation with a stable ID, origina
 
 - [ ] **FU-07 · Measure ingest latency below the three-second threshold.** Origin [M4.1 calibration](docs/calibration.md). The current histogram verifies the three-second p95 bound. Add finer buckets below that threshold so the soak report can compare observed p95 estimates across days. Preserve the existing SLO check and verify the reported percentile against a known latency distribution. *(OPS-02, AC-03, AC-06)*
 
+- [ ] **FU-08 · Preserve the primary SQLite write error during spool recovery.** Origin M4.2 bounded filesystem drill. The full gateway volume surfaced a generic SQLite result code. Check whether JDBC rollback or autocommit cleanup masks the original write error and preserve both errors in diagnostics. Verify on an independent scratch volume after M4.2. *(OPS-04, AC-11)*
+
 ## Change history
 
 Record changes to milestone sequence, tasks or exit gates here in the same pull request as the edit. Add one entry per change request with its date or version, a short summary, and the affected IDs or sections when applicable. Use a PR or commit reference when available. When a request changes more than one document, record its effect in each affected file.
@@ -133,3 +135,4 @@ Record changes to milestone sequence, tasks or exit gates here in the same pull 
 | M4.1 one-hour calibration | [PR #51](https://github.com/utkarshmankad/iot-streaming-platform/pull/51) | Completed the one-hour laptop measurement and both queue probes after the implementation passed the required CI gate. Selected 10 one-hertz streams per type per tenant for the pilot. Measurements and storage projections remain in the local calibration report. |
 | M4.2 outage test duration | This revision | Set the M4.2 fault workload to one continuous day of backlog and replay with live traffic. Kept the steady 24-hour window, separate saturation and isolated restore drills, and the seven-day production sizing assumption. |
 | M4.2 steady-pilot fixes | This revision | The steady run committed 0.975 GB and reconciled both tenants. The late trend benchmark exceeded 500 ms and returned HTTP 503. Bound the raw trend scans and corrected stopped SQLite snapshot reconciliation. The remaining fault and restore drills keep M4.2 open. |
+| M4.2 gateway storage alarms | This revision | Added warning and critical coverage for the spool filesystem after the bounded disk drill exhausted it while the alarm receiver's filesystem still had space. Recorded the diagnostic follow-up in FU-08. |

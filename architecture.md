@@ -320,6 +320,8 @@ Treat missing data as unknown or a scrape failure. Clear thresholds after their 
 
 The database collector reads a fixed fleet summary every 15 seconds and returns unavailable or unknown on query failure. The SQL function returns counts and timestamps. It has no tenant arguments or raw telemetry access through the operation. Source timestamps and sample freshness use a bounded recent-reading lookup. Gateway queue utilization uses pending payload bytes divided by the per-tenant budget. Simulator receipt age measures time since the last terminal receipt while its outbox is nonempty. The collector publishes archive state and failure counters. The checked-in rules cover overdue verified backups, failed checksums and missing backup timestamps once the backup publisher is configured in M3.4.
 
+Check available space on the gateway spool filesystem as well as the alarm receiver's Docker storage. The gateway reports usable bytes from the filesystem that holds its SQLite spool. Preserve the scrape source on each alarm so an operator can identify which filesystem is low on space.
+
 ### Log locations and operator access
 
 | Record | Location and retention |
@@ -400,3 +402,4 @@ Record changes to design decisions, interfaces or operational behavior here in t
 | M4.1 calibration runner | This revision | Added isolated one-hour sampling of committed payload sizes and local resources, separate SQLite backlog probes, and projected database, archive and queue capacity for the pilot. |
 | M4.2 outage test duration | This revision | Documented the 24-hour laptop partition and replay sequence, measured queue sizing, and the seven-day production spool on additional ARM64 gateway storage. |
 | M4.2 steady-pilot fixes | This revision | Bounded trend raw reads by tenant, sensor and time. Opened stopped simulator snapshots without modifying evidence, including snapshots with pending WAL. |
+| M4.2 gateway storage alarms | This revision | Extended the storage warning and critical rules to cover the gateway spool's own filesystem. |

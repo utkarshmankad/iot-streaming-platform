@@ -2,6 +2,33 @@ rule_files: [alerts.yml]
 evaluation_interval: 15s
 
 tests:
+  - name: an independently mounted gateway spool can fill while Docker storage is healthy
+    interval: 15s
+    input_series:
+      - series: 'iot_alarm_storage_available_bytes{job="alarm-receiver",instance="alarm-receiver:8080"}'
+        values: '60000000000+0x28'
+      - series: 'iot_gateway_spool_storage_available_bytes{job="java-services",instance="gateway:8080"}'
+        values: '20000000000+0x3 8000000000+0x7 1000000000+0x7 20000000000+0x8'
+    alert_rule_test:
+      - eval_time: 0m45s
+        alertname: StorageHeadroom
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: StorageHeadroom
+        exp_alerts:
+          - exp_labels: {job: java-services, instance: 'gateway:8080', severity: warning, stage: storage, condition: disk}
+            exp_annotations: {summary: 'Docker or gateway spool storage has less than 10 GB free', runbook: 'docs/local-deployment.md#alarms-and-metrics'}
+      - eval_time: 3m30s
+        alertname: StorageHeadroomCritical
+        exp_alerts:
+          - exp_labels: {job: java-services, instance: 'gateway:8080', severity: critical, stage: storage, condition: disk}
+            exp_annotations: {summary: 'Docker or gateway spool storage has less than 5 GB free', runbook: 'docs/local-deployment.md#alarms-and-metrics'}
+      - eval_time: 6m
+        alertname: StorageHeadroom
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: StorageHeadroomCritical
+        exp_alerts: []
   - name: queue warnings, critical escalation, and recovery
     interval: 15s
     input_series:

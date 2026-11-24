@@ -1,6 +1,6 @@
 # Environmental IoT streaming platform
 
-**Version 0.7 · Implementation specification**
+**Version 0.8 · Implementation specification**
 
 ## 1. Scope and workload
 
@@ -82,7 +82,7 @@
 | AC-04 | Validate bucket edges, weekly boundaries, weighted means, late arrivals and gaps against deterministic fixtures. Fresh committed data becomes visible in the current trend within 30 s under steady load. |
 | AC-05 | Online sensor commands reach confirmed state within 5 s at p95. Pause stops new samples, resume restarts them and an offline command cannot report success without ACK. Test duplicate requests, stale versions, restart and expired commands. |
 | AC-06 | The run report explains resource growth, interruptions, retention and capacity bottlenecks with measured data. CI checks the short test workloads. The 15-day run executes locally. |
-| AC-07 | At the calibrated rate in the laptop fault profile, keep sensors and MQTT running through a continuous 24-hour gateway-to-backend disconnect. Reconnect while generation continues and verify backlog alerts, measured drain time, historical chart repair and per-tenant reconciliation. Exercise WAN-only isolation, stale/offline transitions and queue saturation in their respective scenarios. Record actual outage duration, peak backlog, replay rate and any data gaps. |
+| AC-07 | At the calibrated rate in the laptop fault profile, accumulate 24 active hours of sensor generation with the gateway disconnected from the backend. A documented laptop sleep interval pauses active time. Keep the link disconnected across sleep and extend the same run by the sleep duration. Reconnect while generation continues and verify backlog alerts, measured drain time, historical chart repair and per-tenant reconciliation. Exercise WAN-only isolation, stale/offline transitions and queue saturation in their respective scenarios. Record elapsed disconnection time, active generation time, sleep and wake times, peak backlog, replay rate and any data gaps. Report the sleep interval as a gap in generated readings. |
 | AC-08 | Restore from the independent backup into fresh volumes, measure RPO and restore time, reconcile commands and verify tenant isolation. |
 | AC-09 | For all six sensor types, submit valid and invalid events, including a mixed batch. Concurrently replay a valid event and reuse its ID with modified content. Verify one committed row, duplicate success for unchanged payloads and explicit conflict for changed payloads. |
 | AC-10 | Restart the MQTT broker and simulate a lost application receipt after spool commit. Verify that the producer keeps its outbox until gateway receipt, replays unchanged bytes, and yields one committed event. Verify tenant topic ACLs and binary message validation. |
@@ -115,3 +115,4 @@ Record changes to requirements, scope or acceptance criteria here in the same pu
 | Documentation tracking | This revision | Added a record of requirement changes and the convention for future entries. |
 | v0.6 | This revision | Added the local ARM64 and SD-card topology, future cloud site recovery, and terminal command expiry for late acknowledgments. (REQ-05–06, CTL-01) |
 | v0.7 · M4.2 outage test duration | This revision | Set the laptop fault test to a continuous 24-hour backlog and replay. Retained seven days of production buffering on additional gateway storage and the independent restore acceptance criterion. (REQ-06, OPS-04, AC-07–08) |
+| v0.8 · M4.2 active outage time | This revision | Counted 24 active hours of generation during the gateway partition and excluded documented laptop sleep. Retained replay and tenant reconciliation checks. (AC-07) |

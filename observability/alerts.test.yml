@@ -2,6 +2,80 @@ rule_files: [alerts.yml]
 evaluation_interval: 15s
 
 tests:
+  - name: sub-three-second ingest p95 interpolates within a known latency bucket
+    interval: 1m
+    input_series:
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="0.2"}'
+        values: '0+90x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="0.3"}'
+        values: '0+100x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="2.5"}'
+        values: '0+100x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="3.0"}'
+        values: '0+100x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="+Inf"}'
+        values: '0+100x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_count'
+        values: '0+100x6'
+    promql_expr_test:
+      - expr: round(iot_ingest_gateway_to_commit_p95_seconds, 0.000001)
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 0.25
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: IngestLatency
+        exp_alerts: []
+  - name: ingest p95 above the last finite bucket keeps the original latency alert
+    interval: 1m
+    input_series:
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="2.5"}'
+        values: '0+80x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="3.0"}'
+        values: '0+90x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="+Inf"}'
+        values: '0+100x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_count'
+        values: '0+100x6'
+    promql_expr_test:
+      - expr: iot_ingest_gateway_to_commit_p95_seconds
+        eval_time: 6m
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: IngestLatency
+        exp_alerts:
+          - exp_labels: {severity: warning, stage: ingest}
+            exp_annotations: {summary: 'More than five percent of commits exceed 3 seconds', runbook: 'docs/local-deployment.md#alarms-and-metrics'}
+  - name: insufficient ingest observations do not produce a p95 estimate
+    interval: 1m
+    input_series:
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="2.5"}'
+        values: '0+1x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="3.0"}'
+        values: '0+1x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="+Inf"}'
+        values: '0+1x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_count'
+        values: '0+1x6'
+    promql_expr_test:
+      - expr: iot_ingest_gateway_to_commit_p95_seconds
+        eval_time: 5m
+        exp_samples: []
+  - name: legacy ingest histogram has no usable sub-three-second buckets
+    interval: 1m
+    input_series:
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="3.0"}'
+        values: '0+100x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_bucket{le="+Inf"}'
+        values: '0+100x6'
+      - series: 'iot_ingest_gateway_to_commit_seconds_count'
+        values: '0+100x6'
+    promql_expr_test:
+      - expr: iot_ingest_gateway_to_commit_p95_seconds
+        eval_time: 5m
+        exp_samples: []
   - name: an independently mounted gateway spool can fill while Docker storage is healthy
     interval: 15s
     input_series:

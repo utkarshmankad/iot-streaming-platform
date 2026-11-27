@@ -5,6 +5,13 @@ groups:
         expr: |
           (iot_gateway_spool_bytes / iot_gateway_spool_capacity_bytes)
           or (iot_simulator_pending_bytes / iot_simulator_pending_capacity_bytes)
+      - record: iot_ingest_gateway_to_commit_p95_seconds
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(iot_ingest_gateway_to_commit_seconds_bucket[5m])))
+          and sum(rate(iot_ingest_gateway_to_commit_seconds_bucket{le="2.5"}[5m]))
+          and sum(increase(iot_ingest_gateway_to_commit_seconds_count[5m])) >= 20
+          and sum(rate(iot_ingest_gateway_to_commit_seconds_bucket{le="3.0"}[5m]))
+            >= 0.95 * sum(rate(iot_ingest_gateway_to_commit_seconds_count[5m]))
       - alert: Watchdog
         expr: |
           vector(1)

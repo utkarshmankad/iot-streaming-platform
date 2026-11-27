@@ -97,6 +97,11 @@ class TelemetryIngestIntegrationTest {
           var now = System.currentTimeMillis();
           verifyMixedBatch(http, endpoint, now, owner);
           assertEquals(2, commits.count());
+          assertArrayEquals(
+              new long[] {25, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 2500, 3000},
+              Arrays.stream(commits.takeSnapshot().histogramCounts())
+                  .mapToLong(bucket -> Math.round(bucket.bucket(TimeUnit.MILLISECONDS)))
+                  .toArray());
           verifyHttpEnvelope(http, endpoint, now);
           verifyTenantScope(database.getJdbcUrl());
           verifyConcurrentClaims(http, endpoint, now, owner);

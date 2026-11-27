@@ -6,13 +6,17 @@ import com.google.protobuf.ByteString;
 import iot.platform.control.proto.SamplingCommand;
 import iot.platform.telemetry.SensorType;
 import iot.platform.telemetry.TelemetryValidation;
+import iot.platform.telemetry.proto.TelemetryEvent;
 import iot.platform.telemetry.proto.TelemetryReceipt;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.DriverManager;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.sqlite.SQLiteErrorCode;
+import org.sqlite.SQLiteException;
 
 class SimulatorOutboxTest {
   private static final long NOW = 1_800_000_000_000L;
@@ -100,6 +104,56 @@ class SimulatorOutboxTest {
       assertEquals(1, stats.accepted());
       assertEquals(first.payload().length, stats.generatedBytes());
       assertEquals(1, outbox.stats(otherTenant.device().tenantId()).pendingEvents());
+    }
+  }
+
+  @Test
+  void keepsWriteErrorAndCheckpointsWhenSqliteRollsBackGeneration() throws Exception {
+    var sensor = stream(1, 2, SensorType.TEMPERATURE);
+    var file = directory.resolve("generation-failure.sqlite");
+    var initial = new SimulatorOutbox.Intent(sensor, NOW);
+    var second = new SimulatorOutbox.Intent(sensor, NOW + 1000);
+    var third = new SimulatorOutbox.Intent(sensor, NOW + 2000);
+    try (var outbox = SimulatorOutbox.open(file, 10_000, true);
+        var setup = DriverManager.getConnection("jdbc:sqlite:" + file);
+        var sql = setup.createStatement()) {
+      outbox.generate(List.of(initial), SEED);
+      sql.execute(
+          """
+          CREATE TRIGGER reject_third_checkpoint BEFORE INSERT ON checkpoints
+          WHEN NEW.sequence = 3
+          BEGIN
+            SELECT RAISE(ROLLBACK, 'fixture rolled back generation');
+          END
+          """);
+
+      var failure =
+          assertThrows(SQLiteException.class, () -> outbox.generate(List.of(second, third), SEED));
+      assertEquals(SQLiteErrorCode.SQLITE_CONSTRAINT_TRIGGER, failure.getResultCode());
+      assertEquals(1, failure.getSuppressed().length);
+      assertEquals(
+          SQLiteErrorCode.SQLITE_ERROR,
+          assertInstanceOf(SQLiteException.class, failure.getSuppressed()[0]).getResultCode());
+      var stats = outbox.stats(sensor.device().tenantId());
+      assertEquals(1, stats.generated());
+      assertEquals(1, stats.pendingEvents());
+      try (var rows = sql.executeQuery("SELECT sequence, observed_ms FROM checkpoints")) {
+        assertTrue(rows.next());
+        assertEquals(1, rows.getLong("sequence"));
+        assertEquals(NOW, rows.getLong("observed_ms"));
+        assertFalse(rows.next());
+      }
+
+      sql.execute("DROP TRIGGER reject_third_checkpoint");
+      outbox.generate(List.of(initial, second, third), SEED);
+      var pending = outbox.due(sensor.device(), NOW + 2000, 3);
+      assertEquals(3, pending.size());
+      for (int index = 0; index < pending.size(); index++) {
+        assertEquals(
+            SensorReadings.sample(sensor, SEED, index + 1, NOW + index * 1000L),
+            TelemetryEvent.parseFrom(pending.get(index).payload()));
+      }
+      assertEquals(3, outbox.stats(sensor.device().tenantId()).generated());
     }
   }
 

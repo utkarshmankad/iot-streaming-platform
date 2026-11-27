@@ -328,6 +328,8 @@ Check available space on the gateway spool filesystem as well as the alarm recei
 
 The gateway rolls back a failed spool transaction. SQLite can already have rolled it back when the filesystem fills or an I/O error occurs. Gateway warnings record the original SQLite result code and any cleanup error codes separately, without logging telemetry payloads. A failed admission returns retryable `spool-unavailable`. After restoring free space, check that the original events retry and both tenants' queues drain. [SQLite transaction error handling](https://sqlite.org/lang_transaction.html#response_to_errors_within_a_transaction)
 
+The simulator also records the original outbox SQLite error and cleanup codes in its Docker logs. A failed generation transaction preserves previously queued readings and checkpoints. When storage is writable again, the scheduler resumes generation and retries queued readings with their original IDs. Reconcile any sampling gaps that occurred while writes failed.
+
 ### Log locations and operator access
 
 | Record | Location and retention |
@@ -416,3 +418,4 @@ Record changes to design decisions, interfaces or operational behavior here in t
 | FU-05 database ingestion mutation coverage | This revision | Added the pinned TimescaleDB integration fixture to the backend Nightly PIT scope. The report verifies that the fixture exercises the ingestion and receipt store. |
 | FU-07 ingest latency buckets | This revision | Added sub-three-second ingest histogram buckets and an exportable five-minute p95 estimate. Preserved the three-second ratio used for the existing alert and CI gate. (AC-03, AC-06) |
 | FU-08 gateway SQLite diagnostics | This revision | Kept the original spool write or commit error and attached rollback failures separately. Added safe result-code logging and strengthened the isolated filesystem recovery assertions. (OPS-04, AC-11, FT-01H) |
+| FU-09 simulator SQLite diagnostics | This revision | Retained the primary outbox transaction error and logged cleanup codes separately. Added isolated simulator disk recovery checks for queued identities and generation checkpoints. (ING-02, OPS-04, AC-11) |

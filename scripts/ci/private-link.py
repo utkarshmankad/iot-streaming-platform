@@ -3,9 +3,9 @@
 
 import json
 import os
-import sqlite3
+import re
 import subprocess
-from contextlib import closing
+from collections import Counter
 from pathlib import Path
 from runpy import run_path
 
@@ -25,6 +25,7 @@ ENV = dict(os.environ, IOT_PRIVATE_LINK_STATE=str(STATE), IOT_EDGE_STORAGE=str(S
            IOT_HTTP_PORT="0", IOT_STACK_IMAGE_TAG=os.environ.get("IOT_PRIVATE_LINK_IMAGE_TAG", "test"))
 helpers = run_path(str(ROOT / "scripts/ci/telemetry-faults.py"))
 eventually, require, TENANTS = (helpers[key] for key in ("eventually", "require", "TENANTS"))
+open_snapshot = run_path(str(ROOT / "scripts/pilot-reconcile.py"))["open_snapshot"]
 
 
 def run(*args, check=True, capture=True):
@@ -56,20 +57,31 @@ def container(service):
 
 
 def spool_keys():
-    with closing(sqlite3.connect(f"{(STORAGE / 'gateway.sqlite').as_uri()}?mode=ro", uri=True)) as sqlite:
-        return set(sqlite.execute("SELECT tenant,sensor,event FROM spool ORDER BY id LIMIT 250"))
+    with open_snapshot(STORAGE / "gateway.sqlite") as sqlite:
+        return {
+            row for tenant in TENANTS for row in
+            sqlite.execute("SELECT tenant,sensor,event FROM spool WHERE tenant=? ORDER BY id LIMIT 125", (tenant,))
+        }
 
 
 def queued():
     text = compose("exec", "-T", "gateway", "wget", "-qO-",
                    "http://127.0.0.1:8080/actuator/prometheus").stdout
-    return sum(float(line.split()[1]) for line in text.splitlines()
-               if line.startswith("iot_gateway_spool_events{"))
+    return {tenant: float(count) for tenant, count in re.findall(
+        r'^iot_gateway_spool_events\{tenant="([^"]+)"\}\s+(\S+)', text, re.MULTILINE
+    )}
 
 
 def confirm(keys):
     records = database("SELECT tenant_id,sensor_id,event_id FROM telemetry.event_receipts")
     return keys <= {tuple(row.split("|")) for row in records.splitlines()}
+
+
+def registry_http_status():
+    result = compose("exec", "-T", "gateway", "wget", "-S", "-T", "5", "-O", "/dev/null",
+                     "http://edge-listener:8081/internal/v1/registry", check=False)
+    match = re.search(r"HTTP/\S+ (\d+)", result.stderr)
+    return int(match[1]) if match else None
 
 
 def verify():
@@ -111,11 +123,19 @@ def verify():
         edge_proxy = container("edge-uplink")
         # Keep the gateway's network namespace stable while the remote endpoint is unreachable.
         compose("stop", "cloud-uplink")
-        eventually("gateway buffering after WAN cut", lambda: queued() >= 16)
+        eventually("the gateway route to report loss of the cloud", lambda: registry_http_status() in (502, 504))
+        before_cut_sample = queued()
+
+        def both_tenants_buffered():
+            counts = queued()
+            return all(counts.get(tenant, 0) >= before_cut_sample.get(tenant, 0) + 8 for tenant in TENANTS)
+
+        eventually("gateway buffering for both tenants after WAN cut", both_tenants_buffered)
         frozen = commits()
         compose("stop", "gateway")
         saved = spool_keys()
         require({tenant for tenant, _, _ in saved} == set(TENANTS), "Durable spool is missing a tenant")
+        sampled = Counter(tenant for tenant, _, _ in saved)
 
         hidden_marker = MARKER.with_suffix(".disabled")
         MARKER.rename(hidden_marker)
@@ -127,13 +147,15 @@ def verify():
             hidden_marker.rename(MARKER)
 
         compose("up", "-d", "--no-deps", "--no-build", "--force-recreate", "--wait", "gateway")
-        eventually("durable queue after restart with the WAN still cut", lambda: queued() >= len(saved))
+        def both_queues_survive():
+            counts = queued()
+            return all(counts.get(tenant, 0) >= sampled[tenant] for tenant in TENANTS)
+
+        eventually("both durable queues after restart with the WAN still cut", both_queues_survive)
         require(frozen == commits(), "Cloud kept receiving readings during the WAN cut")
         compose("start", "cloud-uplink")
         eventually("the authenticated TLS link and backend route to return", lambda:
-                   "401" in compose("exec", "-T", "gateway", "wget", "-S", "-T", "3", "-O",
-                                    "/dev/null", "http://edge-listener:8081/internal/v1/registry",
-                                    check=False).stderr)
+                   registry_http_status() == 401)
         eventually("recorded identities in the cloud receipt ledger", lambda: confirm(saved), timeout=65)
         require(container("edge-uplink") == edge_proxy, "Replay replaced the field uplink proxy")
         REPORT.parent.mkdir(parents=True, exist_ok=True)

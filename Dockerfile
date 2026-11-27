@@ -1,7 +1,10 @@
 FROM eclipse-temurin:25.0.5_8-jdk-noble AS build
 WORKDIR /workspace
 COPY gradle/ gradle/
-COPY gradlew settings.gradle.kts build.gradle.kts ./
+COPY gradlew ./
+RUN ./gradlew --version
+
+COPY settings.gradle.kts build.gradle.kts ./
 COPY backend/ backend/
 COPY gateway/ gateway/
 COPY simulator/ simulator/

@@ -52,7 +52,19 @@ class TelemetryIngest {
     receiptToCommit =
         Timer.builder("iot.ingest.gateway.to.commit")
             .description("Gateway receipt to database commit for newly committed readings")
-            .serviceLevelObjectives(Duration.ofSeconds(3))
+            .serviceLevelObjectives(
+                Duration.ofMillis(25),
+                Duration.ofMillis(50),
+                Duration.ofMillis(100),
+                Duration.ofMillis(200),
+                Duration.ofMillis(300),
+                Duration.ofMillis(500),
+                Duration.ofMillis(750),
+                Duration.ofSeconds(1),
+                Duration.ofMillis(1500),
+                Duration.ofSeconds(2),
+                Duration.ofMillis(2500),
+                Duration.ofSeconds(3))
             .register(metrics);
   }
 

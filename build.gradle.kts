@@ -28,8 +28,16 @@ data class MutationScope(val classes: Set<String>, val tests: Set<String>)
 
 val mutationScopes = mapOf(
     "backend" to MutationScope(
-        setOf("iot.platform.backend.ingest.TelemetryIngest", "iot.platform.backend.control.CommandStore\$Command"),
-        setOf("iot.platform.backend.ingest.TelemetryFingerprintTest", "iot.platform.backend.control.CommandTimingTest"),
+        setOf(
+            "iot.platform.backend.ingest.TelemetryIngest",
+            "iot.platform.backend.ingest.TelemetryStore",
+            "iot.platform.backend.control.CommandStore\$Command",
+        ),
+        setOf(
+            "iot.platform.backend.ingest.TelemetryFingerprintTest",
+            "iot.platform.backend.ingest.TelemetryIngestIntegrationTest",
+            "iot.platform.backend.control.CommandTimingTest",
+        ),
     ),
     "contracts" to MutationScope(
         setOf("iot.platform.telemetry.TelemetryValidation", "iot.platform.control.CommandProtocol"),
@@ -117,6 +125,11 @@ configure(services) {
     val integrationSource = sourceSets.create("integrationTest") {
         compileClasspath += mainSource.output
         runtimeClasspath += mainSource.output
+    }
+    if (name == "backend") {
+        extensions.configure<PitestPluginExtension> {
+            testSourceSets.set(listOf(sourceSets.named("test").get(), integrationSource))
+        }
     }
     configurations.named(integrationSource.implementationConfigurationName) {
         extendsFrom(configurations.getByName("testImplementation"))

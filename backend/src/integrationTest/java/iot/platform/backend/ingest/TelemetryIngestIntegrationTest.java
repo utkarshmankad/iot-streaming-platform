@@ -32,6 +32,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -39,6 +40,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import org.springframework.dao.DataRetrievalFailureException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -194,7 +199,8 @@ class TelemetryIngestIntegrationTest {
             "payload-too-large"),
         response.getResultsList().stream().map(TelemetryBatchResult::getReasonCode).toList());
 
-    var b = batch(reading("1", TENANT_B, initial.toBuilder().setValue(21.3).build(), now));
+    var tenantBReading = initial.toBuilder().setValue(21.3).build();
+    var b = batch(reading("1", TENANT_B, tenantBReading, now));
     assertEquals(Outcome.COMMITTED, submit(http, endpoint, TOKEN_B, b).getResults(0).getOutcome());
     assertEquals(
         Outcome.DUPLICATE,
@@ -206,6 +212,7 @@ class TelemetryIngestIntegrationTest {
             .getResults(0)
             .getOutcome());
     assertCounts(owner, 2);
+    verifyReceiptFingerprints(owner, initial, tenantBReading);
     try (var sql = owner.createStatement();
         var rows =
             sql.executeQuery(
@@ -258,6 +265,30 @@ class TelemetryIngestIntegrationTest {
       sql.execute("UPDATE registry.gateways SET status='active'");
     }
     assertCounts(owner, 2);
+  }
+
+  private static void verifyReceiptFingerprints(
+      Connection owner, TelemetryEvent tenantAReading, TelemetryEvent tenantBReading) {
+    // The owner connection can see both tenants. This tests the store's SQL filter independently of
+    // RLS.
+    var jdbc = new JdbcTemplate(new SingleConnectionDataSource(owner, true));
+    var store = new TelemetryStore(JdbcClient.create(jdbc), jdbc);
+    var tenantA = UUID.fromString(TENANT_A);
+    var tenantB = UUID.fromString(TENANT_B);
+    var key =
+        new TelemetryStore.Key(
+            UUID.fromString(SENSOR), UUID.fromString(tenantAReading.getEventId()));
+    assertEquals(
+        Map.of(key, TelemetryIngest.fingerprint(key, tenantAReading)),
+        store.fingerprints(tenantA, List.of(key)));
+    assertEquals(
+        Map.of(key, TelemetryIngest.fingerprint(key, tenantBReading)),
+        store.fingerprints(tenantB, List.of(key)));
+    assertTrue(store.fingerprints(tenantA, List.of()).isEmpty());
+    var missing = new TelemetryStore.Key(key.sensor(), new UUID(0, 999));
+    assertThrows(
+        DataRetrievalFailureException.class,
+        () -> store.fingerprints(tenantA, List.of(key, missing)));
   }
 
   private static void verifyHttpEnvelope(HttpClient http, URI endpoint, long now) throws Exception {

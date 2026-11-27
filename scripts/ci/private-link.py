@@ -16,6 +16,7 @@ STATE = ROOT / "run-artifacts/private-link"
 STORAGE = STATE / "storage"
 MARKER = STORAGE / ".iot-edge-storage"
 REPORT = ROOT / "build/ci/private-link.json"
+LOG = REPORT.with_suffix(".log")
 COMPOSE = [
     "docker", "compose", "--env-file", ".env.private-link", "-p", PROJECT, "--profile", "test",
     "-f", "compose.yaml", "-f", "compose.private-link.yaml",
@@ -107,8 +108,9 @@ def verify():
         require(result.returncode and "404 Not Found" in result.stderr,
                 "TLS-authenticated proxy exposes an unexpected route")
 
-        uplink = container("edge-uplink")
-        run("docker", "network", "disconnect", f"{PROJECT}_wan", uplink)
+        edge_proxy = container("edge-uplink")
+        # Keep the gateway's network namespace stable while the remote endpoint is unreachable.
+        compose("stop", "cloud-uplink")
         eventually("gateway buffering after WAN cut", lambda: queued() >= 16)
         frozen = commits()
         compose("stop", "gateway")
@@ -127,8 +129,13 @@ def verify():
         compose("up", "-d", "--no-deps", "--no-build", "--force-recreate", "--wait", "gateway")
         eventually("durable queue after restart with the WAN still cut", lambda: queued() >= len(saved))
         require(frozen == commits(), "Cloud kept receiving readings during the WAN cut")
-        run("docker", "network", "connect", f"{PROJECT}_wan", uplink)
+        compose("start", "cloud-uplink")
+        eventually("the authenticated TLS link and backend route to return", lambda:
+                   "401" in compose("exec", "-T", "gateway", "wget", "-S", "-T", "3", "-O",
+                                    "/dev/null", "http://edge-listener:8081/internal/v1/registry",
+                                    check=False).stderr)
         eventually("recorded identities in the cloud receipt ledger", lambda: confirm(saved), timeout=65)
+        require(container("edge-uplink") == edge_proxy, "Replay replaced the field uplink proxy")
         REPORT.parent.mkdir(parents=True, exist_ok=True)
         REPORT.write_text(json.dumps({
             "image_architecture": arch, "unauthenticated_cloud_rejected": True,
@@ -138,6 +145,9 @@ def verify():
         }, indent=2) + "\n")
         print(REPORT)
     finally:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        LOG.write_text(compose("logs", "--no-color", "--tail", "120", "edge-uplink", "cloud-uplink",
+                               "gateway", "backend", check=False).stdout)
         compose("down", "--volumes", check=False)
 
 

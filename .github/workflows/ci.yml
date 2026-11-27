@@ -337,6 +337,7 @@ jobs:
             build/ci/command-latency.txt
             build/ci/alarms.ndjson
             build/ci/private-link.json
+            build/ci/private-link.log
             build/ci/recovery.json
             build/ci/recovery-compose.log
             build/ci/faults/

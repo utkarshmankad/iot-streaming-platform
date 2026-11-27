@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.sql.SQLException;
 import java.time.Clock;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -89,7 +90,24 @@ final class Simulation {
   }
 
   @Scheduled(fixedDelay = 50)
-  synchronized void tick() throws SQLException {
+  synchronized void tick() {
+    try {
+      advance();
+    } catch (SQLException failure) {
+      var cleanupCodes =
+          Arrays.stream(failure.getSuppressed())
+              .filter(SQLException.class::isInstance)
+              .map(SQLException.class::cast)
+              .map(SQLException::getErrorCode)
+              .toList();
+      LOG.warn(
+          "Simulator outbox operation failed with SQLite error code {} (cleanup codes {})",
+          failure.getErrorCode(),
+          cleanupCodes);
+    }
+  }
+
+  private void advance() throws SQLException {
     long now = clock.millis();
     boolean withholdCommandAck = faultCommandAck != null && Files.exists(faultCommandAck);
     for (var session : sessions.values()) {

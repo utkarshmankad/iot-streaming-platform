@@ -402,16 +402,22 @@ final class SimulatorOutbox implements AutoCloseable {
   }
 
   private <T> T transaction(SqlAction<T> action) throws SQLException {
-    db.setAutoCommit(false);
-    try {
-      T result = action.run();
-      db.commit();
-      return result;
-    } catch (SQLException | RuntimeException failure) {
-      db.rollback();
-      throw failure;
-    } finally {
-      db.setAutoCommit(true);
+    // Use explicit transaction control to avoid JDBC committing during autocommit reset.
+    try (var sql = db.createStatement()) {
+      sql.execute("BEGIN");
+      try {
+        T result = action.run();
+        sql.execute("COMMIT");
+        return result;
+      } catch (SQLException | RuntimeException failure) {
+        try {
+          sql.execute("ROLLBACK");
+        } catch (SQLException cleanup) {
+          // SQLite can end the transaction itself when a write fails.
+          failure.addSuppressed(cleanup);
+        }
+        throw failure;
+      }
     }
   }
 

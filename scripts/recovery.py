@@ -163,13 +163,18 @@ def queue_totals(path, table):
 def snapshot_queues(stack, env, receiver, staging):
     captured = {}
     for service, (_, name) in QUEUES.items():
-        source_id = container(stack, env, service)
-        args = ["docker", "run", "--rm", "--pull", "never", "--network", "none", "-i", "--entrypoint", "python",
-                "--user", "10001:10001", "--volumes-from", source_id, receiver, "-", f"/var/lib/iot/{name}"]
-        with (OPS / "snapshot.py").open("rb") as script:
-            write_stream(staging / name, args, source=script)
+        snapshot_queue(stack, env, receiver, service, staging / name)
         captured[service] = now().isoformat()
     return captured
+
+
+def snapshot_queue(stack, env, receiver, service, destination):
+    source_id = container(stack, env, service)
+    name = QUEUES[service][1]
+    args = ["docker", "run", "--rm", "--pull", "never", "--network", "none", "-i", "--entrypoint", "python",
+            "--user", "10001:10001", "--volumes-from", source_id, receiver, "-", f"/var/lib/iot/{name}"]
+    with (OPS / "snapshot.py").open("rb") as script:
+        write_stream(destination, args, source=script)
 
 
 def take(profile):
@@ -369,6 +374,28 @@ def reconcile(stack, env, folder):
         run([*stack, "exec", "-T", "timescaledb", "psql", "-Xq", "-U", "iot", "-d", "iot",
              "-v", "generation=" + generation, "-f", "-"], env=env, source=source)
     return generation
+
+
+def reconcile_field():
+    """Read the surviving simulated field state while cloud command ingress is held."""
+    state = Path(os.environ.get("IOT_PRIVATE_LINK_STATE", ROOT / "run-artifacts/private-link"))
+    if not state.is_absolute():
+        raise RecoveryError("Use an absolute path for IOT_PRIVATE_LINK_STATE.")
+    env = dict(os.environ, IOT_PRIVATE_LINK_STATE=str(state), IOT_EDGE_STORAGE=str(state / "storage"),
+               IOT_STACK_IMAGE_TAG=os.environ.get("IOT_PRIVATE_LINK_IMAGE_TAG", "test"))
+    stack = ["docker", "compose", "--env-file", ".env.private-link", "-p", "iot-platform-private-link",
+             "--profile", "test", "-f", "compose.yaml", "-f", "compose.private-link.yaml"]
+    backend_id = container(stack, env, "backend")
+    config = json.loads(output(["docker", "inspect", "--format", "{{json .Config.Env}}", backend_id]))
+    if "IOT_CONTROL_RESTORE_HOLD=true" not in config:
+        raise RecoveryError("Start the private-link backend with IOT_CONTROL_RESTORE_HOLD=true first.")
+
+    receiver = image(container(stack, env, "alarm-receiver"))
+    with tempfile.TemporaryDirectory(prefix="iot-surviving-field-") as scratch:
+        folder = Path(scratch)
+        snapshot_queue(stack, env, receiver, "simulator", folder / "simulator.sqlite")
+        generation = reconcile(stack, env, folder)
+    print(generation)
 
 
 def import_queued_ids(stack, env, folder):
@@ -590,7 +617,7 @@ def watch(profile):
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("profile", choices=("local", "test"))
+    parser.add_argument("profile", choices=("local", "test", "private-link"))
     actions = parser.add_subparsers(dest="action", required=True)
     actions.add_parser("configure").add_argument("target", type=Path)
     actions.add_parser("take")
@@ -607,8 +634,15 @@ def main():
     rpo = actions.add_parser("measure-rpo")
     rpo.add_argument("name")
     rpo.add_argument("--incident-at", required=True)
+    actions.add_parser("reconcile-field")
     args = parser.parse_args()
-    if args.action == "configure":
+    if args.profile == "private-link":
+        if args.action != "reconcile-field":
+            parser.error("Use reconcile-field for the private-link simulator.")
+        reconcile_field()
+    elif args.action == "reconcile-field":
+        parser.error("Select the private-link profile for reconcile-field.")
+    elif args.action == "configure":
         setup_target(args.profile, args.target)
     elif args.action == "take":
         take_locked(args.profile)

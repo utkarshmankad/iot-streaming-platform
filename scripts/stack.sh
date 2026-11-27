@@ -103,7 +103,11 @@ if [ "$deployment" != private-link ] && [ -f "$backup_config" ]; then
 fi
 if [ "$deployment" = pilot ]; then set -- -f compose.pilot-fault.yaml "$@"; fi
 if [ "$deployment" = private-link ]; then
-    IOT_PRIVATE_LINK_STATE="$PWD/run-artifacts/private-link"
+    IOT_PRIVATE_LINK_STATE=${IOT_PRIVATE_LINK_STATE:-"$PWD/run-artifacts/private-link"}
+    case "$IOT_PRIVATE_LINK_STATE" in
+        /*) ;;
+        *) printf '%s\n' 'Use an absolute path for IOT_PRIVATE_LINK_STATE.' >&2; exit 1 ;;
+    esac
     IOT_EDGE_STORAGE="$IOT_PRIVATE_LINK_STATE/storage"
     IOT_STACK_IMAGE_TAG=${IOT_PRIVATE_LINK_IMAGE_TAG:-test}
     export IOT_PRIVATE_LINK_STATE IOT_EDGE_STORAGE

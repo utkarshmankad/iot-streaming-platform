@@ -10,6 +10,10 @@ x-uplink: &uplink
       max-file: "5"
 
 services:
+  backend:
+    environment:
+      IOT_CONTROL_RESTORE_HOLD: ${IOT_CONTROL_RESTORE_HOLD:-false}
+
   gateway:
     networks: !override [sensors, edge-api]
     cpus: 4.0

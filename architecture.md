@@ -41,40 +41,31 @@ For development, `compose.dev.yaml` provides TimescaleDB and an authenticated Mo
 
 The deployment Compose file provides `local` and `test` profiles with distinct project names and storage. It builds separate images for backend, gateway, simulator and frontend, publishes only the dashboard on loopback, and isolates service links on internal Docker networks. A dedicated frontend ingress bridge has outbound masquerading disabled. M0 exposes Spring process readiness and metrics. Initial dependency readiness is checked by Compose before starting dependents. Runtime telemetry, dependency-specific readiness and the durable alarm receiver land with their feature tasks. [Local deployment runbook](docs/local-deployment.md)
 
-### Local two-host Docker layout
+### Local field and cloud simulation
+
+Use the optional `private-link` Compose deployment on the Mac. Distinct Docker networks stand in for the field subnets, internet path and cloud subnets. The field simulator and Java gateway exchange binary Protobuf over Mosquitto on the field sensor network. The gateway calls a local uplink proxy. The proxy authenticates the cloud uplink's TLS certificate and presents its own client certificate. The cloud proxy allows only registry, telemetry, heartbeat and command endpoints, and the backend still requires its normal tenant-scoped gateway credentials. The simulated WAN carries only the TLS exchange. The dashboard is published on laptop loopback.
 
 ~~~mermaid
 flowchart LR
-  subgraph Laptop["Laptop · local Docker"]
-    Sim["Sensor simulator"]
-    API["Java backend"]
-    DB[("TimescaleDB")]
-    Web["Nginx · React"]
-    Monitor["Monitoring"]
-    Web --> API
-    API --> DB
+  subgraph Field
+    Sim["Simulated sensors"] <-->|"MQTT 5"| MQTT["Mosquitto"]
+    MQTT <-->|"MQTT 5"| Gateway["Java gateway"]
+    Gateway --- Storage[("Bind mount · SD stand-in")]
+    Gateway --> Edge["Field uplink proxy"]
   end
-  subgraph ARM["One ARM64 Linux device · edge Docker"]
-    MQTT["Mosquitto"]
-    Gateway["Java gateway"]
-    Card[("SD · spool and registry cache")]
-    MQTT <-->|"MQTT 5 on private bridge"| Gateway
-    Gateway --- Card
+  subgraph Cloud
+    Ingress["Cloud uplink proxy"] --> API["Java backend"]
+    API --> DB[("TimescaleDB")]
+    Web["React dashboard"] --> API
   end
-  Sim <-->|"MQTT 5 on the site LAN"| MQTT
-  Gateway <-->|"Authenticated registry, batches and command exchange"| API
+  Edge -->|"Mutual TLS over simulated WAN"| Ingress
 ~~~
 
-| Host | Compose services and network access |
-|---|---|
-| ARM64 gateway | Run the Java gateway and Mosquitto as separate containers on one private bridge. The gateway resolves `mosquitto:1883` on that bridge. Bind the broker listener to the ARM device's site-LAN address for simulator traffic and limit access to the authorized sensor network. |
-| Laptop | Run the simulator, Java backend, TimescaleDB, React/Nginx and monitoring. Use the broker's ARM LAN address for the simulator. Publish the dashboard on laptop loopback and provide a LAN listener restricted to the ARM device for the authenticated gateway endpoints. Keep TimescaleDB on the private laptop network. |
-
-Provision the matching broker ACL and credentials from the laptop registry. Transfer the generated ACL to the edge securely and mount it read-only in Mosquitto. Store the MQTT data and the gateway state in separate directories. Mount the SD card by filesystem UUID, verify that it is present and writable before starting Compose, and bind its gateway state directory to `/var/lib/iot`. Keep SQLite WAL and `synchronous=FULL` with the spool and registry cache on that card. A missing or read-only card leaves ingestion unavailable until durable writes can resume. Measure the SD footprint separately from container images. The single-laptop Compose profile remains the reproducible CI and soak baseline.
+The gateway container has a four-CPU limit in this profile. Before opening SQLite, it checks for the expected marker on the mounted directory and attempts a write. Simulated outages disconnect the TLS link and preserve the bind mount. Verify persistence across gateway recreation and replay with original event IDs after reconnection. FU-04 uses the surviving local simulator as the field device when rehearsing backend recovery. [Private-link runbook](docs/private-link.md)
 
 ### Future production and site recovery
 
-Production places the Java backend, TimescaleDB and React monitoring in the cloud. Each site retains the ARM64 gateway and Mosquitto on the same device. The gateway uses its additional mounted storage, such as the SD card, for its durable SQLite spool. Size that storage for seven days of unconfirmed readings at the site's design rate, including SQLite tables, indexes, WAL and free-space margin. The gateway initiates authenticated connections to the cloud over the uplink.
+Production places the Java backend, TimescaleDB and React monitoring in the cloud. Each site retains the ARM64 gateway and Mosquitto on the same device. The gateway uses its additional mounted storage, such as the SD card, for its durable SQLite spool. Size that storage for seven days of unconfirmed readings at the site's design rate, including SQLite tables, indexes, WAL and free-space margin. The field gateway initiates mutually authenticated TLS to a dedicated cloud ingress over the internet. Use managed site credentials and trust roots in production. Keep the browser ingress, database and MQTT paths outside this link. Mount the SD card by filesystem UUID, verify it is writable before starting Compose, and provision broker ACLs and credentials through the deployment process.
 
 | Scenario | Expected behavior |
 |---|---|
@@ -419,3 +410,4 @@ Record changes to design decisions, interfaces or operational behavior here in t
 | FU-07 ingest latency buckets | This revision | Added sub-three-second ingest histogram buckets and an exportable five-minute p95 estimate. Preserved the three-second ratio used for the existing alert and CI gate. (AC-03, AC-06) |
 | FU-08 gateway SQLite diagnostics | This revision | Kept the original spool write or commit error and attached rollback failures separately. Added safe result-code logging and strengthened the isolated filesystem recovery assertions. (OPS-04, AC-11, FT-01H) |
 | FU-09 simulator SQLite diagnostics | This revision | Retained the primary outbox transaction error and logged cleanup codes separately. Added isolated simulator disk recovery checks for queued identities and generation checkpoints. (ING-02, OPS-04, AC-11) |
+| Field/cloud private link and simulated recovery · 2026-11-28 | This revision | Replaced the dedicated two-host LAN exercise with a field/cloud simulation using a mutually authenticated TLS link, a mounted storage stand-in and a surviving simulator for control recovery. (REQ-05–06, FU-03–04) |

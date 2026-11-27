@@ -12,14 +12,21 @@ case "${1:-}" in
         credentials=.env.test
         default_port=18080
         ;;
+    private-link)
+        project=iot-platform-private-link
+        credentials=.env.private-link
+        default_port=18085
+        ;;
     *)
-        printf '%s\n' 'Usage: scripts/stack.sh {local|test|pilot} {up|build|up-built|offline-up|status|down|reset}' >&2
+        printf '%s\n' 'Usage: scripts/stack.sh {local|test|pilot|private-link} {up|build|up-built|offline-up|status|down|reset}' >&2
         exit 2
         ;;
 esac
 profile=$1
 deployment=$profile
-if [ "$deployment" = pilot ]; then profile=test; fi
+case "$deployment" in
+    pilot|private-link) profile=test ;;
+esac
 action=${2:-}
 
 cd "$(dirname "$0")/.."
@@ -68,13 +75,13 @@ case "$action" in
     down) set -- down ;;
     reset) set -- down --volumes ;;
     *)
-        printf '%s\n' 'Usage: scripts/stack.sh {local|test|pilot} {up|build|up-built|offline-up|status|down|reset}' >&2
+        printf '%s\n' 'Usage: scripts/stack.sh {local|test|pilot|private-link} {up|build|up-built|offline-up|status|down|reset}' >&2
         exit 2
         ;;
 esac
 
 if [ ! -f "$credentials" ]; then
-    printf 'Run scripts/stack.sh %s up to initialize %s.\n' "$profile" "$credentials" >&2
+    printf 'Run scripts/stack.sh %s up to initialize %s.\n' "$deployment" "$credentials" >&2
     exit 1
 fi
 
@@ -88,11 +95,21 @@ fi
 export IOT_HTTP_PORT=${IOT_HTTP_PORT:-$default_port}
 export IOT_STACK_IMAGE_TAG=$profile
 backup_config=.env.backup-$profile
-if [ -f "$backup_config" ]; then
+if [ "$deployment" != private-link ] && [ -f "$backup_config" ]; then
     IOT_BACKUP_DIR=$(sed -n '1p' "$backup_config")
     IOT_BACKUP_TARGET_ID=$(sed -n '2p' "$backup_config")
     export IOT_BACKUP_DIR IOT_BACKUP_TARGET_ID
     set -- -f compose.backup.yaml "$@"
 fi
 if [ "$deployment" = pilot ]; then set -- -f compose.pilot-fault.yaml "$@"; fi
+if [ "$deployment" = private-link ]; then
+    IOT_PRIVATE_LINK_STATE="$PWD/run-artifacts/private-link"
+    IOT_EDGE_STORAGE="$IOT_PRIVATE_LINK_STATE/storage"
+    IOT_STACK_IMAGE_TAG=${IOT_PRIVATE_LINK_IMAGE_TAG:-test}
+    export IOT_PRIVATE_LINK_STATE IOT_EDGE_STORAGE
+    case "$action" in
+        up|up-built|offline-up) sh scripts/private-link-init.sh "$IOT_PRIVATE_LINK_STATE" "$IOT_EDGE_STORAGE" ;;
+    esac
+    set -- -f compose.private-link.yaml "$@"
+fi
 exec docker compose --env-file "$credentials" --project-name "$project" --profile "$profile" -f compose.yaml "$@"

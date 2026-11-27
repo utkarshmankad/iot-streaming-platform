@@ -63,9 +63,10 @@ final class GatewayIngress {
       admissions = spool.admit(registry.tenant(), pending.stream().map(Pending::reading).toList());
     } catch (SQLException unavailable) {
       LOG.warn(
-          "Gateway spool write failed for tenant {} with SQLite error code {}",
+          "Gateway spool write failed for tenant {} with SQLite error code {} (cleanup codes {})",
           registry.tenant(),
-          unavailable.getErrorCode());
+          unavailable.getErrorCode(),
+          GatewaySpool.cleanupErrorCodes(unavailable));
       admissions =
           Collections.nCopies(
               pending.size(),

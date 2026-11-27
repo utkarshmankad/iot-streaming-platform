@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.sqlite.SQLiteErrorCode;
+import org.sqlite.SQLiteException;
 
 class GatewaySpoolTest {
   static final UUID TENANT_A = UUID.fromString("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
@@ -80,6 +82,50 @@ class GatewaySpoolTest {
       assertEquals("invalid-reading", rows.getString("reason"));
       assertEquals(1, rows.getInt("count"));
       assertFalse(rows.next());
+    }
+  }
+
+  @Test
+  void keepsWriteErrorWhenSqliteAlreadyRolledBackAndAcceptsRetry() throws Exception {
+    var file = directory.resolve("write-failure.sqlite");
+    var existing = reading(1, "saved", NOW);
+    var first = reading(2, "first", NOW);
+    var second = reading(3, "second", NOW);
+    try (var spool = GatewaySpool.open(file, 1000);
+        var setup = DriverManager.getConnection("jdbc:sqlite:" + file);
+        var sql = setup.createStatement()) {
+      spool.admit(TENANT_A, List.of(existing));
+      sql.execute(
+          """
+          CREATE TRIGGER reject_spool_write BEFORE INSERT ON spool
+          WHEN length(NEW.payload) = 6
+          BEGIN
+            SELECT RAISE(ROLLBACK, 'fixture rolled back spool write');
+          END
+          """);
+
+      var failure =
+          assertThrows(SQLiteException.class, () -> spool.admit(TENANT_A, List.of(first, second)));
+      assertEquals(SQLiteErrorCode.SQLITE_CONSTRAINT_TRIGGER, failure.getResultCode());
+      assertEquals(1, failure.getSuppressed().length);
+      assertEquals(
+          SQLiteErrorCode.SQLITE_ERROR,
+          assertInstanceOf(SQLiteException.class, failure.getSuppressed()[0]).getResultCode());
+      assertEquals(1, spool.stats(TENANT_A).accepted());
+      assertEquals(
+          List.of(existing.payload()),
+          spool.next(TENANT_A, NOW, 250, false).stream()
+              .map(GatewaySpool.Queued::payload)
+              .toList());
+
+      sql.execute("DROP TRIGGER reject_spool_write");
+      assertEquals(
+          List.of(Outcome.DUPLICATE, Outcome.ACCEPTED, Outcome.ACCEPTED),
+          spool.admit(TENANT_A, List.of(existing, first, second)).stream()
+              .map(GatewaySpool.Admission::outcome)
+              .toList());
+      assertEquals(3, spool.stats(TENANT_A).events());
+      assertEquals(3, spool.stats(TENANT_A).accepted());
     }
   }
 

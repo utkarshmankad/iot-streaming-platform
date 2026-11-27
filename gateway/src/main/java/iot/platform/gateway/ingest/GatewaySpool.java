@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
@@ -363,17 +364,31 @@ final class GatewaySpool implements AutoCloseable {
   }
 
   private <T> T transaction(SqlAction<T> action) throws SQLException {
-    db.setAutoCommit(false);
-    try {
-      T result = action.run();
-      db.commit();
-      return result;
-    } catch (SQLException | RuntimeException failure) {
-      db.rollback();
-      throw failure;
-    } finally {
-      db.setAutoCommit(true);
+    // Use explicit transaction control to avoid JDBC committing during autocommit reset.
+    try (var sql = db.createStatement()) {
+      sql.execute("BEGIN");
+      try {
+        T result = action.run();
+        sql.execute("COMMIT");
+        return result;
+      } catch (SQLException | RuntimeException failure) {
+        try {
+          sql.execute("ROLLBACK");
+        } catch (SQLException cleanup) {
+          // SQLite can end the transaction itself when a write fails.
+          failure.addSuppressed(cleanup);
+        }
+        throw failure;
+      }
     }
+  }
+
+  static List<Integer> cleanupErrorCodes(SQLException failure) {
+    return Arrays.stream(failure.getSuppressed())
+        .filter(SQLException.class::isInstance)
+        .map(SQLException.class::cast)
+        .map(SQLException::getErrorCode)
+        .toList();
   }
 
   void queueAck(UUID tenant, String command, byte[] payload) throws SQLException {

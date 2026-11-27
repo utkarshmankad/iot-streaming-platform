@@ -117,9 +117,10 @@ final class GatewayIngestion {
         }
       } catch (SQLException failure) {
         LOG.warn(
-            "Gateway spool operation failed for tenant {} with SQLite error code {}",
+            "Gateway spool operation failed for tenant {} with SQLite error code {} (cleanup codes {})",
             channel.tenant(),
-            failure.getErrorCode());
+            failure.getErrorCode(),
+            GatewaySpool.cleanupErrorCodes(failure));
       }
     }
     if (now >= nextMetrics) {

@@ -90,6 +90,8 @@ Record validated work discovered during implementation with a stable ID, origina
 
 - [ ] **FU-08 · Preserve the primary SQLite write error during spool recovery.** Origin M4.2 bounded filesystem drill. The full gateway volume surfaced a generic SQLite result code. Check whether JDBC rollback or autocommit cleanup masks the original write error and preserve both errors in diagnostics. Verify on an independent scratch volume after M4.2. *(OPS-04, AC-11)*
 
+- [ ] **FU-09 · Preserve the primary SQLite write error in the simulator outbox.** Origin FU-08 review. The outbox uses the same JDBC rollback and autocommit cleanup sequence. After FU-08, reproduce and fix error masking on a disposable simulator volume. Verify that the simulator reports the original write error and any cleanup error, recovers when space is freed, and preserves queued events and generation checkpoints. *(ING-02, OPS-04, AC-11)*
+
 ## Change history
 
 Record changes to milestone sequence, tasks or exit gates here in the same pull request as the edit. Add one entry per change request with its date or version, a short summary, and the affected IDs or sections when applicable. Use a PR or commit reference when available. When a request changes more than one document, record its effect in each affected file.
@@ -144,3 +146,4 @@ Record changes to milestone sequence, tasks or exit gates here in the same pull 
 | FU-05 database ingestion mutation coverage | [PR #66](https://github.com/utkarshmankad/iot-streaming-platform/pull/66) | Verified the pinned TimescaleDB fixture exercises 76 ingestion and receipt-store mutations, up from three. The [Nightly run](https://github.com/utkarshmankad/iot-streaming-platform/actions/runs/45999752283) published the reports. (FU-05) |
 | FU-06 scheduled Nightly trigger | [PR #68](https://github.com/utkarshmankad/iot-streaming-platform/pull/68) | Verified seven successful scheduled runs on protected main and the four-module [mutation report](https://github.com/utkarshmankad/iot-streaming-platform/actions/runs/45935810441/artifacts/15170577059). GitHub created the latest verified run at 09:13 IST for the configured 03:00 IST trigger. (FU-06) |
 | FU-07 ingest latency buckets | [PR #70](https://github.com/utkarshmankad/iot-streaming-platform/pull/70) | Verified the 12 ingest histogram bounds against TimescaleDB integration and a 250 ms p95 estimate against a known Prometheus distribution. The existing three-second SLO alert and CI check still use the three-second count and total. (FU-07) |
+| Simulator outbox SQLite diagnostics | This revision | Recorded FU-09 after reviewing the simulator's use of the same JDBC transaction cleanup sequence as the gateway. |

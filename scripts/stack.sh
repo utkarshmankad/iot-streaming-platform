@@ -78,6 +78,13 @@ if [ ! -f "$credentials" ]; then
     exit 1
 fi
 
+if [ "$action" = up ] || [ "$action" = build ]; then
+    # The classic builder cannot share work between parallel Compose builds.
+    if [ "${DOCKER_BUILDKIT:-1}" = 0 ] || ! docker buildx version >/dev/null 2>&1; then
+        export COMPOSE_PARALLEL_LIMIT=1
+    fi
+fi
+
 export IOT_HTTP_PORT=${IOT_HTTP_PORT:-$default_port}
 export IOT_STACK_IMAGE_TAG=$profile
 backup_config=.env.backup-$profile
